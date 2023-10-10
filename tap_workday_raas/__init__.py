@@ -79,7 +79,6 @@ def main():
         exc_type, exc_value, exc_traceback = sys.exc_info()
         error_info = {
             'message': traceback.format_exception_only(exc_type, exc_value)[-1],
-            'code': e.code,
             'traceback': "".join(traceback.format_tb(exc_traceback))
         }
         raise
