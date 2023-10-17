@@ -30,7 +30,7 @@ def stream_report(report_url, user, password):
             resp.raise_for_status()
         except requests.exceptions.HTTPError as e:
             if '401 Client Error: Unauthorized for url' in str(e):
-                raise SymonException('Invalid username or password. Please update your connection credentials and try again.',
+                raise SymonException('The username or password provided is incorrect. Please check and try again',
                                      'workday.InvalidUsernameOrPassword')
             raise
 
