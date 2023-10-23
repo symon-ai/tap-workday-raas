@@ -25,44 +25,50 @@ def stream_report(report_url, user, password):
     corrected_url = url_breakdown[0] + "?" + param_string
 
     # Get the data
-    with requests.get(corrected_url, auth=(user, password), stream=True) as resp:
-        try:
+    try:    
+        with requests.get(corrected_url, auth=(user, password), stream=True) as resp:
             resp.raise_for_status()
-        except requests.exceptions.HTTPError as e:
-            if '401 Client Error: Unauthorized for url' in str(e):
-                raise SymonException('The username or password provided is incorrect. Please check and try again',
-                                     'workday.InvalidUsernameOrPassword')
-            raise
 
-        # Set up our search key
-        report_entry_key = b"Report_Entry"
-        search_prefix = report_entry_key.decode("utf-8") + ".item"
 
-        # NB This creates a "push" style interface with the ijson iterable
-        # parser This sendable_list will be populated with intermediate
-        # values by the items_coro() when send() is called. The
-        # sendable_list must then be purged of values before it can be
-        # used again. We have an explicit check for whether we find the
-        # 'Report_Entry' key because if we do not find it the parser
-        # yields 0 records instead of failing and this allows us to know
-        # if the schema is changed
-        records = ijson_core.sendable_list()
-        coro = ijson.items_coro(records, search_prefix)
+            # Set up our search key
+            report_entry_key = b"Report_Entry"
+            search_prefix = report_entry_key.decode("utf-8") + ".item"
 
-        found_key = False
-        for chunk in resp.iter_content(chunk_size=512):
-            if report_entry_key in chunk:
-                found_key = True
-            coro.send(chunk)
-            for rec in records:
-                yield rec
-            del records[:]
+            # NB This creates a "push" style interface with the ijson iterable
+            # parser This sendable_list will be populated with intermediate
+            # values by the items_coro() when send() is called. The
+            # sendable_list must then be purged of values before it can be
+            # used again. We have an explicit check for whether we find the
+            # 'Report_Entry' key because if we do not find it the parser
+            # yields 0 records instead of failing and this allows us to know
+            # if the schema is changed
+            records = ijson_core.sendable_list()
+            coro = ijson.items_coro(records, search_prefix)
 
-        if not found_key:
-            raise Exception(
-                "Did not see '{}' key in response. Report does not conform to expected schema, failing.".format(report_entry_key))
+            found_key = False
+            for chunk in resp.iter_content(chunk_size=512):
+                if report_entry_key in chunk:
+                    found_key = True
+                coro.send(chunk)
+                for rec in records:
+                    yield rec
+                del records[:]
 
-        coro.close()
+            if not found_key:
+                raise Exception(
+                    "Did not see '{}' key in response. Report does not conform to expected schema, failing.".format(report_entry_key))
+
+            coro.close()
+    except requests.exceptions.HTTPError as e:
+        if '401 Client Error: Unauthorized for url' in str(e):
+            raise SymonException('The username or password provided is incorrect. Please check and try again',
+                                'workday.InvalidUsernameOrPassword')
+        raise
+    except requests.exceptions.ConnectionError as e:
+        message = str(e)
+        if 'nodename nor servname provided' in message or 'Name or service not known' in message:
+            raise SymonException(f'The report URL {report_url} was not found. Please check the report URL and try again.', 'workdayRaaS.WorkdayRaaSInvalidReportURL')
+        raise
 
 
 def download_xsd(report_url, user, password):
@@ -70,14 +76,19 @@ def download_xsd(report_url, user, password):
         xsds_url = report_url.split("?")[0] + "?xsds"
     else:
         xsds_url = report_url + "?xsds"
-    response = requests.get(xsds_url, auth=(user, password))
 
     try:
+        response = requests.get(xsds_url, auth=(user, password))
         response.raise_for_status()
     except requests.exceptions.HTTPError as e:
         if '500 Server Error: Internal Server Error for url' in str(e):
             raise SymonException("Sorry, we couldn't access your report. Verify your report URL and try again.",
                                  'workdayRaaS.WorkdayRaaSInvalidReportURL')
+        raise
+    except requests.exceptions.ConnectionError as e:
+        message = str(e)
+        if 'nodename nor servname provided' in message or 'Name or service not known' in message:
+            raise SymonException(f'The report URL {report_url} was not found. Please check the report URL and try again.', 'workdayRaaS.WorkdayRaaSInvalidReportURL')
         raise
 
     return response.text
