@@ -68,7 +68,7 @@ def stream_report(report_url, user, password):
         raise
     except requests.exceptions.ConnectionError as e:
         message = str(e)
-        if 'nodename nor servname provided' in message or 'Name or service not known' in message:
+        if 'nodename nor servname provided, or not known' in message or 'Name or service not known' in message:
             raise SymonException(f'The report URL "{report_url}" was not found. Please check the report URL and try again.', 'workdayRaaS.WorkdayRaaSInvalidReportURL')
         raise SymonException(f'Sorry, we couldn\'t connect to the specified report URL "{report_url}". Please ensure all the connection form values are correct.', 'workday.ConnectionFailed')
 
@@ -91,7 +91,7 @@ def download_xsd(report_url, user, password):
         raise
     except requests.exceptions.ConnectionError as e:
         message = str(e)
-        if 'nodename nor servname provided' in message or 'Name or service not known' in message:
+        if 'nodename nor servname provided, or not known' in message or 'Name or service not known' in message:
             raise SymonException(f'The report URL {report_url} was not found. Please check the report URL and try again.', 'workdayRaaS.WorkdayRaaSInvalidReportURL')
         raise SymonException(f'Sorry, we couldn\'t connect to the specified report URL "{report_url}". Please ensure all the connection form values are correct.', 'workday.ConnectionFailed')
 
