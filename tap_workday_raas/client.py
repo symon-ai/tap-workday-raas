@@ -64,13 +64,13 @@ def stream_report(report_url, user, password):
             raise SymonException('The username or password provided is incorrect. Please check and try again',
                                 'workday.InvalidUsernameOrPassword')
         if e.response is not None and e.response.text:
-            raise SymonException(f'Import failed with the following WorkdayRaaS error: {e.response.text}', 'workdayRaaS.WorkdayRaaSApiError')
+            raise SymonException(f'Import failed with the following WorkdayRaaS error: {e.response.text}', 'workday.WorkdayApiError')
         raise
     except requests.exceptions.ConnectionError as e:
         message = str(e)
         if 'nodename nor servname provided' in message or 'Name or service not known' in message:
-            raise SymonException(f'The report URL {report_url} was not found. Please check the report URL and try again.', 'workdayRaaS.WorkdayRaaSInvalidReportURL')
-        raise
+            raise SymonException(f'The report URL "{report_url}" was not found. Please check the report URL and try again.', 'workdayRaaS.WorkdayRaaSInvalidReportURL')
+        raise SymonException(f'Sorry, we couldn\'t connect to the specified report URL "{report_url}". Please ensure all the connection form values are correct.', 'workday.ConnectionFailed')
 
 
 def download_xsd(report_url, user, password):
@@ -87,12 +87,12 @@ def download_xsd(report_url, user, password):
             raise SymonException("Sorry, we couldn't access your report. Verify your report URL and name and try again.",
                                  'workdayRaaS.WorkdayRaaSInvalidReportURL')
         if e.response is not None and e.response.text:
-            raise SymonException(f'Import failed with the following WorkdayRaaS error: {e.response.text}', 'workdayRaaS.WorkdayRaaSApiError')
+            raise SymonException(f'Import failed with the following WorkdayRaaS error: {e.response.text}', 'workday.WorkdayApiError')
         raise
     except requests.exceptions.ConnectionError as e:
         message = str(e)
         if 'nodename nor servname provided' in message or 'Name or service not known' in message:
             raise SymonException(f'The report URL {report_url} was not found. Please check the report URL and try again.', 'workdayRaaS.WorkdayRaaSInvalidReportURL')
-        raise
+        raise SymonException(f'Sorry, we couldn\'t connect to the specified report URL "{report_url}". Please ensure all the connection form values are correct.', 'workday.ConnectionFailed')
 
     return response.text
