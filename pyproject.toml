@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "tap-workday-raas"
-version = "1.0.5"
+version = "1.1.0"
 description = "Singer.io tap for extracting data from Workday RaaS"
 authors = ["Stitch"]
 classifiers = ["Programming Language :: Python :: 3 :: Only"]
@@ -9,8 +9,9 @@ classifiers = ["Programming Language :: Python :: 3 :: Only"]
 python = "~3.7"
 backoff = "1.8.0"
 singer-python = "5.9.0"
-requests = "2.22.0"
+requests = "^2.31.0"
 ijson = "3.1.4"
+urllib3 = "^1.26.17"
 
 [tool.poetry.dev-dependencies]
 ipdb = "*"
