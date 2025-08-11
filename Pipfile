@@ -17,6 +17,7 @@ requests = "==2.32.4"
 simplejson = "==3.11.1"
 singer-python = "==5.9.0"
 six = "==1.16.0"
+urllib3 = "==1.26.20"
 
 [dev-packages]
 ipdb = "*"
