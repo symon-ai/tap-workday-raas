@@ -84,7 +84,7 @@ def download_xsd(report_url, user, password):
         response.raise_for_status()
     except requests.exceptions.HTTPError as e:
         if '500 Server Error: Internal Server Error for url' in str(e):
-            raise SymonException("Sorry, we couldn't access your report. Verify your report URL and name and try again.",
+            raise SymonException("Sorry, we couldn't access your report. Verify your report URL and name, and ensure your Workday account permissions and security settings allow access. If the issue persists, contact your Workday administrator.",
                                  'workdayRaaS.WorkdayRaaSInvalidReportURL')
         if e.response is not None and e.response.text:
             raise SymonException(f'Import failed with the following WorkdayRaaS error: {e.response.text}', 'workday.WorkdayApiError')
