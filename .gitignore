@@ -167,3 +167,6 @@ generate_schemas.py
 
 # pylint results
 pylint-results.txt
+
+.python-version
+requirements.txt
