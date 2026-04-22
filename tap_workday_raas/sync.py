@@ -9,8 +9,6 @@ LOGGER = singer.get_logger()
 
 def sync_report(report, stream, config):
     report_url = report["report_url"]
-    username = config["username"]
-    password = config["password"]
 
     LOGGER.info('Syncing report "%s".', report_url)
 
@@ -24,7 +22,7 @@ def sync_report(report, stream, config):
     singer.write_version(stream.tap_stream_id, stream_version)
 
     with Transformer() as transformer:
-        for record in stream_report(report_url, username, password):
+        for record in stream_report(report_url, config):
             to_write = transformer.transform(record, stream.schema.to_dict(), metadata.to_map(stream.metadata))
             to_write["_sdc_extracted_at"] = extraction_time
             record_message = singer.RecordMessage(stream.tap_stream_id, to_write, version=stream_version)

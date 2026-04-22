@@ -8,8 +8,9 @@ from singer import utils
 from tap_workday_raas.discover import discover_streams
 from tap_workday_raas.symon_exception import SymonException
 from tap_workday_raas.sync import sync_report
+from tap_workday_raas.oauth_middleware import validate_raas_tap_config
 
-REQUIRED_CONFIG_KEYS = ["username", "password", "reports"]
+REQUIRED_CONFIG_KEYS = ["reports"]
 LOGGER = singer.get_logger()
 
 # for symon error logging
@@ -62,6 +63,10 @@ def main():
         error_info = None
 
         args = utils.parse_args(REQUIRED_CONFIG_KEYS)
+        try:
+            validate_raas_tap_config(args.config)
+        except ValueError as err:
+            raise SymonException(str(err), "workday.InvalidConfig") from err
 
         if args.discover:
             do_discover(args.config)

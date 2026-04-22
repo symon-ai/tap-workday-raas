@@ -105,14 +105,11 @@ def discover_streams(config):
 
     reports = config["reports"]
 
-    username = config["username"]
-    password = config["password"]
-
     for report in reports:
         LOGGER.info('Downloading XSD to determine table schema "%s".',
                     report["report_name"])
 
-        xsd = download_xsd(report["report_url"], username, password)
+        xsd = download_xsd(report["report_url"], config)
         schema = generate_schema_for_report(xsd)
 
         stream_md = metadata.get_standard_metadata(schema,
