@@ -44,7 +44,32 @@ class TestRaasConfig(unittest.TestCase):
                 "client_id": "a",
                 "client_secret": "b",
                 "token_url": "https://example.com/token",
+                "oauth_grant_type": "refresh_token",
                 "refresh_token": "rt",
+                "reports": [{"report_name": "r"}],
+            }
+        )
+
+    def test_validate_oauth_client_credentials_rejects_stray_refresh_token(self):
+        with self.assertRaises(ValueError) as ctx:
+            validate_raas_tap_config(
+                {
+                    "client_id": "a",
+                    "client_secret": "b",
+                    "token_url": "https://example.com/token",
+                    "oauth_grant_type": "client_credentials",
+                    "refresh_token": "should_not_be_here",
+                    "reports": [{"report_name": "r"}],
+                }
+            )
+        self.assertIn("refresh_token", str(ctx.exception).lower())
+
+    def test_validate_oauth_client_credentials_ok_without_refresh(self):
+        validate_raas_tap_config(
+            {
+                "client_id": "a",
+                "client_secret": "b",
+                "token_url": "https://example.com/token",
                 "reports": [{"report_name": "r"}],
             }
         )
@@ -78,3 +103,52 @@ class TestTokenProvider(unittest.TestCase):
         self.assertEqual(p.get_access_token(), "tok123")
         self.assertEqual(sess.headers["Authorization"], "Bearer tok123")
         mock_http.post.assert_called_once()
+        call_kw = mock_http.post.call_args[1]
+        self.assertIn("Authorization", call_kw["headers"])
+
+    def test_post_body_client_auth(self):
+        mock_http = mock.Mock()
+        mock_resp = mock.Mock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"access_token": "tok456", "expires_in": 3600}
+        mock_http.post.return_value = mock_resp
+
+        p = WorkdayOAuthTokenProvider(
+            client_id="id",
+            client_secret="sec",
+            token_url="https://wd.example.com/ccx/oauth2/t/token",
+            grant_type="client_credentials",
+            session=mock_http,
+            token_client_auth="post_body",
+        )
+        self.assertEqual(p.get_access_token(), "tok456")
+        call_kw = mock_http.post.call_args[1]
+        self.assertNotIn("Authorization", call_kw["headers"])
+        self.assertEqual(call_kw["data"]["client_id"], "id")
+        self.assertEqual(call_kw["data"]["client_secret"], "sec")
+
+    def test_refresh_token_invalid_client_retries_raw_id(self):
+        import base64
+
+        uuid_str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        b64_id = base64.b64encode(uuid_str.encode("ascii")).decode("ascii")
+        mock_http = mock.Mock()
+        fail = mock.Mock()
+        fail.status_code = 401
+        fail.text = '{"error":"invalid_client"}'
+        ok = mock.Mock()
+        ok.status_code = 200
+        ok.json.return_value = {"access_token": "tok789", "expires_in": 3600}
+        mock_http.post.side_effect = [fail, ok]
+
+        p = WorkdayOAuthTokenProvider(
+            client_id=b64_id,
+            client_secret="sec",
+            token_url="https://wd.example.com/ccx/oauth2/t/token",
+            grant_type="refresh_token",
+            refresh_token="rt",
+            session=mock_http,
+            client_id_format="auto",
+        )
+        self.assertEqual(p.get_access_token(), "tok789")
+        self.assertEqual(mock_http.post.call_count, 2)
