@@ -65,6 +65,8 @@ Use an **API Client for Integrations** from Workday. Typical keys: `auth_type`: 
 
 If the token endpoint returns **HTTP 400** while credentials look correct, try **`oauth_token_client_auth": "post_body"`** so `client_id` / `client_secret` are sent in the form body instead of the `Authorization` header.
 
+**Long-running syncs (OAuth only):** Optional **`oauth_access_token_refresh_leeway_seconds`** (default `60`) is how many seconds **before** Workday’s `expires_in` the tap stops reusing the cached access token; **lower** values reuse the token longer. Optional **`oauth_access_token_min_cache_seconds`** (default `60`) sets a minimum cache window. They cannot exceed Workday’s real token lifetime. Symon import extraction often uses a **24-hour** per-job timeout on the extraction step, separate from OAuth.
+
 ```json
 {
   "auth_type": "oauth",

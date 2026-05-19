@@ -14,6 +14,8 @@ sys.modules["tap_workday_raas.oauth_middleware"] = _oauth_mod
 _spec.loader.exec_module(_oauth_mod)
 
 WorkdayOAuthTokenProvider = _oauth_mod.WorkdayOAuthTokenProvider
+WorkdayOAuthError = _oauth_mod.WorkdayOAuthError
+WorkdayRefreshTokenInvalidError = _oauth_mod.WorkdayRefreshTokenInvalidError
 raas_config_uses_oauth = _oauth_mod.raas_config_uses_oauth
 validate_raas_tap_config = _oauth_mod.validate_raas_tap_config
 
@@ -77,6 +79,35 @@ class TestRaasConfig(unittest.TestCase):
     def test_validate_missing_reports(self):
         with self.assertRaises(ValueError):
             validate_raas_tap_config({"username": "u", "password": "p"})
+
+    def test_validate_oauth_token_cache_settings_ok(self):
+        validate_raas_tap_config(
+            {
+                "client_id": "a",
+                "client_secret": "b",
+                "token_url": "https://example.com/token",
+                "oauth_grant_type": "refresh_token",
+                "refresh_token": "rt",
+                "reports": [{"report_name": "r"}],
+                "oauth_access_token_refresh_leeway_seconds": 0,
+                "oauth_access_token_min_cache_seconds": 30,
+            }
+        )
+
+    def test_validate_oauth_token_cache_settings_rejects_bad_leeway(self):
+        with self.assertRaises(ValueError) as ctx:
+            validate_raas_tap_config(
+                {
+                    "client_id": "a",
+                    "client_secret": "b",
+                    "token_url": "https://example.com/token",
+                    "oauth_grant_type": "refresh_token",
+                    "refresh_token": "rt",
+                    "reports": [{"report_name": "r"}],
+                    "oauth_access_token_refresh_leeway_seconds": -1,
+                }
+            )
+        self.assertIn("oauth_access_token_refresh_leeway_seconds", str(ctx.exception))
 
 
 class TestTokenProvider(unittest.TestCase):
@@ -152,3 +183,61 @@ class TestTokenProvider(unittest.TestCase):
         )
         self.assertEqual(p.get_access_token(), "tok789")
         self.assertEqual(mock_http.post.call_count, 2)
+
+    def test_expired_refresh_token_friendly_error(self):
+        mock_http = mock.Mock()
+        mock_resp = mock.Mock()
+        mock_resp.status_code = 400
+        mock_resp.text = '{"error":"invalid_grant","error_description":"Token expired"}'
+        mock_http.post.return_value = mock_resp
+
+        p = WorkdayOAuthTokenProvider(
+            client_id="id",
+            client_secret="sec",
+            token_url="https://wd.example.com/ccx/oauth2/t/token",
+            grant_type="refresh_token",
+            refresh_token="old",
+            session=mock_http,
+        )
+        with self.assertRaises(WorkdayRefreshTokenInvalidError) as ctx:
+            p.get_access_token()
+        self.assertIn("refresh token is no longer valid", str(ctx.exception).lower())
+
+    def test_invalid_client_still_workday_oauth_error(self):
+        mock_http = mock.Mock()
+        mock_resp = mock.Mock()
+        mock_resp.status_code = 401
+        mock_resp.text = '{"error":"invalid_client"}'
+        mock_http.post.return_value = mock_resp
+
+        p = WorkdayOAuthTokenProvider(
+            client_id="id",
+            client_secret="sec",
+            token_url="https://wd.example.com/ccx/oauth2/t/token",
+            grant_type="refresh_token",
+            refresh_token="rt",
+            session=mock_http,
+        )
+        with self.assertRaises(WorkdayOAuthError) as exc:
+            p.get_access_token()
+        self.assertNotIsInstance(exc.exception, WorkdayRefreshTokenInvalidError)
+
+    @mock.patch.object(_oauth_mod.time, "time", return_value=0.0)
+    def test_token_cache_expires_at_uses_custom_leeway(self, _mock_tt):
+        mock_http = mock.Mock()
+        mock_resp = mock.Mock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"access_token": "tok", "expires_in": 100}
+        mock_http.post.return_value = mock_resp
+        p = WorkdayOAuthTokenProvider(
+            client_id="id",
+            client_secret="sec",
+            token_url="https://wd.example.com/ccx/oauth2/t/token",
+            grant_type="refresh_token",
+            refresh_token="rt",
+            session=mock_http,
+            access_token_refresh_leeway_seconds=10,
+            access_token_min_cache_seconds=5,
+        )
+        p.get_access_token()
+        self.assertEqual(p._expires_at, 90.0)

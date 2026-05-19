@@ -8,7 +8,7 @@ import json
 import re
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import requests
 
@@ -20,6 +20,26 @@ class WorkdayOAuthError(Exception):
         super().__init__(message)
         self.status_code = status_code
         self.response_body = response_body
+
+
+class WorkdayRefreshTokenInvalidError(WorkdayOAuthError):
+    """Refresh token rejected by Workday (expired, revoked, or invalid). Update config with a new token."""
+
+
+def _oauth_refresh_token_rejected(status_code: int, body: Optional[str]) -> bool:
+    """True when the token endpoint likely rejected the refresh token (RFC 6749 invalid_grant)."""
+    if status_code not in (400, 401):
+        return False
+    raw = body or ""
+    if "invalid_grant" in raw.lower():
+        return True
+    try:
+        parsed = json.loads(raw)
+        if (parsed.get("error") or "").lower() == "invalid_grant":
+            return True
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    return False
 
 
 _UUID_RE = re.compile(
@@ -78,6 +98,30 @@ def _token_client_id(client_id_raw: str, client_id_format: str) -> str:
     return _resolve_workday_oauth_client_id(client_id_raw)
 
 
+def _oauth_access_token_cache_settings(config: Dict[str, Any]) -> Tuple[int, int]:
+    """
+    Seconds to reuse a cached access token before refreshing.
+
+    Workday returns ``expires_in`` on the token response; we stop reusing the access token
+    ``oauth_access_token_refresh_leeway_seconds`` before that (default 60). Lower values keep
+    the same access token longer. ``oauth_access_token_min_cache_seconds`` is the minimum
+    cache window when ``expires_in - leeway`` would otherwise be very small (default 60).
+    """
+    if config.get("oauth_access_token_refresh_leeway_seconds") is not None:
+        leeway = int(config["oauth_access_token_refresh_leeway_seconds"])
+        if leeway < 0 or leeway > 86400:
+            raise ValueError("oauth_access_token_refresh_leeway_seconds must be between 0 and 86400 inclusive")
+    else:
+        leeway = 60
+    if config.get("oauth_access_token_min_cache_seconds") is not None:
+        min_cache = int(config["oauth_access_token_min_cache_seconds"])
+        if min_cache < 0 or min_cache > 86400:
+            raise ValueError("oauth_access_token_min_cache_seconds must be between 0 and 86400 inclusive")
+    else:
+        min_cache = 60
+    return leeway, min_cache
+
+
 class WorkdayOAuthTokenProvider:
     """Fetches and refreshes OAuth access tokens (Workday API Client for Integrations pattern)."""
 
@@ -93,6 +137,8 @@ class WorkdayOAuthTokenProvider:
         session: Optional[requests.Session] = None,
         token_client_auth: str = "basic",
         client_id_format: str = "auto",
+        access_token_refresh_leeway_seconds: int = 60,
+        access_token_min_cache_seconds: int = 60,
     ):
         self._client_id_raw = (client_id or "").strip()
         self._client_id = _token_client_id(self._client_id_raw, client_id_format)
@@ -109,6 +155,8 @@ class WorkdayOAuthTokenProvider:
         self._access_token: Optional[str] = None
         self._expires_at: float = 0.0
         self._session_ref: Optional[requests.Session] = None
+        self._access_token_refresh_leeway_seconds = int(access_token_refresh_leeway_seconds)
+        self._access_token_min_cache_seconds = int(access_token_min_cache_seconds)
 
     @classmethod
     def from_config(cls, config: Dict[str, Any], verify: bool = True) -> WorkdayOAuthTokenProvider:
@@ -123,6 +171,7 @@ class WorkdayOAuthTokenProvider:
         id_fmt = (config.get("oauth_client_id_format") or "auto").strip().lower()
         if id_fmt not in ("auto", "raw", "uuid"):
             raise ValueError("oauth_client_id_format must be 'auto', 'raw', or 'uuid'")
+        leeway, min_cache = _oauth_access_token_cache_settings(config)
         return cls(
             client_id=config["client_id"],
             client_secret=config["client_secret"],
@@ -133,6 +182,8 @@ class WorkdayOAuthTokenProvider:
             verify=verify,
             token_client_auth=auth_mode,
             client_id_format=id_fmt,
+            access_token_refresh_leeway_seconds=leeway,
+            access_token_min_cache_seconds=min_cache,
         )
 
     def apply_to_session(self, session: requests.Session) -> None:
@@ -213,6 +264,20 @@ class WorkdayOAuthTokenProvider:
             msg = "Token endpoint error: HTTP {}".format(resp.status_code)
             if body_snip:
                 msg = "{} — {}".format(msg, body_snip[:1000])
+            if self._grant_type == "refresh_token" and _oauth_refresh_token_rejected(
+                resp.status_code, resp.text
+            ):
+                msg = (
+                    "Please update your Workday OAuth credentials: the refresh token is no longer valid "
+                    "(expired, revoked, or rotated). Obtain a new refresh token in Workday and update your "
+                    "configuration. Details: "
+                    + msg
+                )
+                raise WorkdayRefreshTokenInvalidError(
+                    msg,
+                    status_code=resp.status_code,
+                    response_body=resp.text,
+                )
             raise WorkdayOAuthError(
                 msg,
                 status_code=resp.status_code,
@@ -226,9 +291,10 @@ class WorkdayOAuthTokenProvider:
         if not access:
             raise WorkdayOAuthError("Token response missing access_token: {}".format(body))
         self._access_token = access
-        skew = int(body.get("expires_in", 3600)) - 60
-        if skew < 60:
-            skew = 60
+        expires_in = int(body.get("expires_in", 3600))
+        skew = expires_in - self._access_token_refresh_leeway_seconds
+        if skew < self._access_token_min_cache_seconds:
+            skew = self._access_token_min_cache_seconds
         self._expires_at = time.time() + float(skew)
         if self._session_ref is not None:
             self._session_ref.headers["Authorization"] = "Bearer " + self._access_token
@@ -260,6 +326,7 @@ def validate_raas_tap_config(config: Dict[str, Any]) -> None:
         auth_mode = (config.get("oauth_token_client_auth") or "basic").strip().lower()
         if auth_mode not in ("basic", "post_body"):
             raise ValueError("oauth_token_client_auth must be 'basic' or 'post_body'")
+        _oauth_access_token_cache_settings(config)
     else:
         if not config.get("username") or not config.get("password"):
             raise ValueError("Basic auth requires username and password in config")
