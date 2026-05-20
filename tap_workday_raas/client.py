@@ -31,7 +31,7 @@ def _wrap_oauth_error(exc):
     if exc.status_code in (400, 401):
         return SymonException(
             "OAuth token request failed. Check client_id, client_secret, refresh_token, and token_url. {}".format(
-                str(exc) or exc.response_body
+                str(exc)
             ),
             "workday.OAuthError",
         )
@@ -71,7 +71,6 @@ def stream_report(report_url, config):
         with session.get(corrected_url, stream=True) as resp:
             if resp.status_code == 401 and oauth_provider is not None:
                 oauth_provider.force_refresh()
-                session.headers["Authorization"] = "Bearer " + oauth_provider.get_access_token()
                 resp.close()
                 with session.get(corrected_url, stream=True) as resp2:
                     resp2.raise_for_status()
@@ -170,7 +169,6 @@ def download_xsd(report_url, config):
         response = _fetch()
         if response.status_code == 401 and oauth_provider is not None:
             oauth_provider.force_refresh()
-            session.headers["Authorization"] = "Bearer " + oauth_provider.get_access_token()
             response = _fetch()
         response.raise_for_status()
     except WorkdayOAuthError as e:

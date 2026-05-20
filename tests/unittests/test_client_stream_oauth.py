@@ -181,7 +181,7 @@ class TestStreamReportOAuth(unittest.TestCase):
         self.assertEqual(len(records), 3)
         self.assertEqual(session.get.call_count, 2)
         provider.force_refresh.assert_called_once()
-        self.assertEqual(provider.get_access_token.call_count, 2)
+        self.assertEqual(provider.get_access_token.call_count, 1)
 
 
 if __name__ == "__main__":

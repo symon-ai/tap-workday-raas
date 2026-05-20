@@ -282,3 +282,30 @@ class TestTokenProvider(unittest.TestCase):
 
         self.assertEqual(p.get_access_token(), "tok3")
         self.assertEqual(mock_http.post.call_count, 3)
+
+    def test_force_refresh_updates_linked_session_header(self):
+        """401 retry in client relies on force_refresh updating apply_to_session's session."""
+        mock_http = mock.Mock()
+        mock_resp = mock.Mock()
+        mock_resp.status_code = 200
+        mock_resp.json.side_effect = [
+            {"access_token": "tok1", "expires_in": 3600},
+            {"access_token": "tok2", "expires_in": 3600},
+        ]
+        mock_http.post.return_value = mock_resp
+
+        p = WorkdayOAuthTokenProvider(
+            client_id="id",
+            client_secret="sec",
+            token_url="https://wd.example.com/ccx/oauth2/t/token",
+            grant_type="refresh_token",
+            refresh_token="rt",
+            session=mock_http,
+        )
+        session = requests.Session()
+        p.apply_to_session(session)
+        self.assertEqual(session.headers["Authorization"], "Bearer tok1")
+
+        p.force_refresh()
+        self.assertEqual(session.headers["Authorization"], "Bearer tok2")
+        self.assertEqual(mock_http.post.call_count, 2)
