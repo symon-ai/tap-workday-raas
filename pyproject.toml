@@ -10,6 +10,7 @@ python = "^3.13.0"
 ijson = "^3.4.0"
 requests = ">=2.33.0"
 singer-python = "6.3.0"
+urllib3 = ">=2.7.0"
 
 [tool.poetry.dev-dependencies]
 ipdb = "*"
