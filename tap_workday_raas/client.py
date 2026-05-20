@@ -11,7 +11,7 @@ from tap_workday_raas.oauth_middleware import (
 
 def _session_for_config(config):
     """Build a requests.Session with basic auth or OAuth Bearer, and optional OAuth provider for retry."""
-    disable_ssl = config.get("disable_ssl_verification", True)
+    disable_ssl = config.get("disable_ssl_verification", False)
     verify = not disable_ssl
     session = requests.Session()
     if disable_ssl:

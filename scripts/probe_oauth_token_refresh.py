@@ -145,7 +145,7 @@ def main() -> int:
         probe_config["oauth_access_token_refresh_leeway_seconds"] = leeway
         probe_config["oauth_access_token_min_cache_seconds"] = min_cache
 
-    verify = not bool(probe_config.get("disable_ssl_verification", True))
+    verify = not bool(probe_config.get("disable_ssl_verification", False))
     provider = WorkdayOAuthTokenProvider.from_config(probe_config, verify=verify)
     token_post_count = _install_token_post_counter(provider)
 

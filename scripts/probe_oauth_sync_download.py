@@ -97,7 +97,7 @@ def _install_http_counters(metrics: _HttpMetrics, *, reuse_provider: bool) -> No
             provider.apply_to_session(session)
             return session, provider
 
-        disable_ssl = config.get("disable_ssl_verification", True)
+        disable_ssl = config.get("disable_ssl_verification", False)
         verify = not disable_ssl
         session = requests.Session()
         if disable_ssl:
@@ -281,7 +281,7 @@ def main() -> int:
     catalog = Catalog.from_dict(catalog_dict)
     streams, reports = _streams_for_run(catalog, config, args.stream)
 
-    verify = not bool(config.get("disable_ssl_verification", True))
+    verify = not bool(config.get("disable_ssl_verification", False))
     print(f"Config: {args.config}")
     print(f"Catalog: {args.catalog}")
     print(f"Streams: {[s.tap_stream_id for s in streams]}")
