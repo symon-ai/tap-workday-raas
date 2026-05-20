@@ -25,6 +25,10 @@ _oauth_mod = _load_module("tap_workday_raas.oauth_middleware", _ROOT / "tap_work
 _client_mod = _load_module("tap_workday_raas.client", _ROOT / "tap_workday_raas" / "client.py")
 
 stream_report = _client_mod.stream_report
+_wrap_oauth_error = _client_mod._wrap_oauth_error
+WorkdayOAuthError = _oauth_mod.WorkdayOAuthError
+WorkdayRefreshTokenInvalidError = _oauth_mod.WorkdayRefreshTokenInvalidError
+SymonException = sys.modules["tap_workday_raas.symon_exception"].SymonException
 
 
 def _minimal_report_json_bytes():
@@ -57,6 +61,32 @@ class _GetContext:
 
     def __exit__(self, *args):
         return False
+
+
+class TestWrapOAuthError(unittest.TestCase):
+    def test_refresh_token_invalid_preserves_friendly_message(self):
+        friendly = (
+            "Please update your Workday OAuth credentials: the refresh token is no longer valid "
+            "(expired, revoked, or rotated). Obtain a new refresh token in Workday and update your "
+            "configuration. Details: Token endpoint error: HTTP 400 — "
+            '{"error":"invalid_grant"}'
+        )
+        exc = WorkdayRefreshTokenInvalidError(
+            friendly,
+            status_code=400,
+            response_body='{"error":"invalid_grant"}',
+        )
+        wrapped = _wrap_oauth_error(exc)
+        self.assertIsInstance(wrapped, SymonException)
+        self.assertEqual(str(wrapped), friendly)
+        self.assertNotIn("Check client_id", str(wrapped))
+
+    def test_other_oauth_400_uses_exception_message_not_raw_body(self):
+        msg = 'Token endpoint error: HTTP 400 — {"error":"invalid_client"}'
+        exc = WorkdayOAuthError(msg, status_code=400, response_body='{"error":"invalid_client"}')
+        wrapped = _wrap_oauth_error(exc)
+        self.assertIn(msg, str(wrapped))
+        self.assertNotEqual(str(wrapped).strip(), '{"error":"invalid_client"}')
 
 
 class TestStreamReportOAuth(unittest.TestCase):

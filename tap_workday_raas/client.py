@@ -5,6 +5,7 @@ from tap_workday_raas.symon_exception import SymonException
 from tap_workday_raas.oauth_middleware import (
     WorkdayOAuthError,
     WorkdayOAuthTokenProvider,
+    WorkdayRefreshTokenInvalidError,
     raas_config_uses_oauth,
 )
 
@@ -25,10 +26,12 @@ def _session_for_config(config):
 
 
 def _wrap_oauth_error(exc):
+    if isinstance(exc, WorkdayRefreshTokenInvalidError):
+        return SymonException(str(exc), "workday.OAuthError")
     if exc.status_code in (400, 401):
         return SymonException(
             "OAuth token request failed. Check client_id, client_secret, refresh_token, and token_url. {}".format(
-                exc.response_body or str(exc)
+                str(exc) or exc.response_body
             ),
             "workday.OAuthError",
         )
