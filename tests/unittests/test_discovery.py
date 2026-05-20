@@ -1,4 +1,6 @@
 import unittest
+from unittest import mock
+
 from tap_workday_raas import discover
 
 
@@ -58,3 +60,33 @@ class DiscoveryTest(unittest.TestCase):
         actual = discover.generate_schema_for_report(xsd)
         
         self.assertEqual(expected, actual)
+
+    @mock.patch.object(discover, "download_xsd", return_value=xsd)
+    @mock.patch.object(discover, "_session_for_config")
+    def test_discover_reuses_single_session_for_all_reports(
+        self, mock_session_for_config, mock_download_xsd
+    ):
+        session = mock.Mock()
+        oauth_provider = mock.Mock()
+        mock_session_for_config.return_value = (session, oauth_provider)
+        config = {
+            "auth_type": "oauth",
+            "client_id": "id",
+            "client_secret": "sec",
+            "token_url": "https://example/token",
+            "refresh_token": "rt",
+            "reports": [
+                {"report_name": "Report_A", "report_url": "https://example/a"},
+                {"report_name": "Report_B", "report_url": "https://example/b"},
+                {"report_name": "Report_C", "report_url": "https://example/c"},
+            ],
+        }
+
+        streams = discover.discover_streams(config)
+
+        mock_session_for_config.assert_called_once_with(config)
+        self.assertEqual(mock_download_xsd.call_count, 3)
+        self.assertEqual(len(streams), 3)
+        for call in mock_download_xsd.call_args_list:
+            self.assertEqual(call.kwargs["session"], session)
+            self.assertEqual(call.kwargs["oauth_provider"], oauth_provider)

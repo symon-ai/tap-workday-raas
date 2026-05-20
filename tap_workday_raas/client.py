@@ -149,18 +149,19 @@ def _iter_report_json(resp):
     coro.close()
 
 
-def download_xsd(report_url, config):
+def download_xsd(report_url, config, session=None, oauth_provider=None):
     if "?" in report_url:
         xsds_url = report_url.split("?")[0] + "?xsds"
     else:
         xsds_url = report_url + "?xsds"
 
-    try:
-        session, oauth_provider = _session_for_config(config)
-    except ValueError as e:
-        raise SymonException(str(e), "workday.InvalidConfig")
-    except WorkdayOAuthError as e:
-        raise _wrap_oauth_error(e)
+    if session is None:
+        try:
+            session, oauth_provider = _session_for_config(config)
+        except ValueError as e:
+            raise SymonException(str(e), "workday.InvalidConfig")
+        except WorkdayOAuthError as e:
+            raise _wrap_oauth_error(e)
 
     def _fetch():
         return session.get(xsds_url)
