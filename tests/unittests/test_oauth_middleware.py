@@ -241,3 +241,44 @@ class TestTokenProvider(unittest.TestCase):
         )
         p.get_access_token()
         self.assertEqual(p._expires_at, 90.0)
+
+    @mock.patch.object(_oauth_mod.time, "time")
+    def test_multiple_access_token_refreshes(self, mock_time):
+        """Proactive cache expiry and force_refresh each hit the token endpoint again."""
+        # Each fetch uses time() twice (cache check + _expires_at); force_refresh uses it once.
+        mock_time.side_effect = [0.0, 0.0, 11.0, 11.0, 11.0, 20.0]
+
+        mock_http = mock.Mock()
+        mock_resp = mock.Mock()
+        mock_resp.status_code = 200
+        mock_resp.json.side_effect = [
+            {"access_token": "tok1", "expires_in": 10},
+            {"access_token": "tok2", "expires_in": 10},
+            {"access_token": "tok3", "expires_in": 10},
+        ]
+        mock_http.post.return_value = mock_resp
+
+        p = WorkdayOAuthTokenProvider(
+            client_id="id",
+            client_secret="sec",
+            token_url="https://wd.example.com/ccx/oauth2/t/token",
+            grant_type="refresh_token",
+            refresh_token="rt",
+            session=mock_http,
+            access_token_refresh_leeway_seconds=0,
+            access_token_min_cache_seconds=1,
+        )
+
+        self.assertEqual(p.get_access_token(), "tok1")
+        self.assertEqual(mock_http.post.call_count, 1)
+        self.assertEqual(p._expires_at, 10.0)
+
+        self.assertEqual(p.get_access_token(), "tok2")
+        self.assertEqual(mock_http.post.call_count, 2)
+        self.assertEqual(p._expires_at, 21.0)
+
+        self.assertEqual(p.force_refresh(), "tok3")
+        self.assertEqual(mock_http.post.call_count, 3)
+
+        self.assertEqual(p.get_access_token(), "tok3")
+        self.assertEqual(mock_http.post.call_count, 3)
