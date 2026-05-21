@@ -26,6 +26,27 @@ class WorkdayRefreshTokenInvalidError(WorkdayOAuthError):
     """Refresh token rejected by Workday (expired, revoked, or invalid). Update config with a new token."""
 
 
+_OAUTH_ERROR_RESPONSE_BODY_MAX_LEN = 2000
+
+
+def workday_oauth_error_details(exc: WorkdayOAuthError) -> Dict[str, Any]:
+    """Preserve token-endpoint diagnostics for error_info while keeping a stable user-facing message."""
+    details: Dict[str, Any] = {
+        "oauthErrorType": type(exc).__name__,
+        "oauthErrorMessage": str(exc),
+    }
+    if exc.status_code is not None:
+        details["statusCode"] = exc.status_code
+    if exc.response_body:
+        body = exc.response_body
+        if len(body) > _OAUTH_ERROR_RESPONSE_BODY_MAX_LEN:
+            details["responseBody"] = body[:_OAUTH_ERROR_RESPONSE_BODY_MAX_LEN]
+            details["responseBodyTruncated"] = True
+        else:
+            details["responseBody"] = body
+    return details
+
+
 def _oauth_refresh_token_rejected(status_code: int, body: Optional[str]) -> bool:
     """True when the token endpoint likely rejected the refresh token (RFC 6749 invalid_grant)."""
     if status_code not in (400, 401):

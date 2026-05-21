@@ -7,6 +7,7 @@ from tap_workday_raas.oauth_middleware import (
     WorkdayOAuthTokenProvider,
     WorkdayRefreshTokenInvalidError,
     raas_config_uses_oauth,
+    workday_oauth_error_details,
 )
 
 
@@ -31,7 +32,11 @@ WORKDAY_OAUTH_TOKEN_REQUEST_FAILED_MESSAGE = (
 
 
 def _wrap_oauth_error(exc):
-    return SymonException(WORKDAY_OAUTH_TOKEN_REQUEST_FAILED_MESSAGE, "workday.OAuthError")
+    return SymonException(
+        WORKDAY_OAUTH_TOKEN_REQUEST_FAILED_MESSAGE,
+        "workday.OAuthError",
+        workday_oauth_error_details(exc),
+    )
 
 
 def stream_report(report_url, config):
