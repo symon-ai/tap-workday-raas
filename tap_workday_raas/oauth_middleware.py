@@ -47,20 +47,32 @@ def workday_oauth_error_details(exc: WorkdayOAuthError) -> Dict[str, Any]:
     return details
 
 
-def _oauth_refresh_token_rejected(status_code: int, body: Optional[str]) -> bool:
-    """True when the token endpoint likely rejected the refresh token (RFC 6749 invalid_grant)."""
-    if status_code not in (400, 401):
-        return False
-    raw = body or ""
-    if "invalid_grant" in raw.lower():
-        return True
+def _oauth_token_error_code(body: Optional[str]) -> Optional[str]:
+    raw = (body or "").strip()
+    if not raw:
+        return None
     try:
         parsed = json.loads(raw)
-        if (parsed.get("error") or "").lower() == "invalid_grant":
-            return True
+        if isinstance(parsed, dict):
+            err = (parsed.get("error") or "").strip().lower()
+            return err or None
     except (json.JSONDecodeError, TypeError, ValueError):
         pass
-    return False
+    return None
+
+
+def _oauth_token_error_is(body: Optional[str], error: str) -> bool:
+    expected = error.lower()
+    code = _oauth_token_error_code(body)
+    if code:
+        return code == expected
+    return expected in (body or "").lower()
+
+
+def _oauth_refresh_token_rejected(status_code: int, body: Optional[str]) -> bool:
+    if status_code not in (400, 401):
+        return False
+    return _oauth_token_error_is(body, "invalid_grant")
 
 
 _UUID_RE = re.compile(
@@ -69,7 +81,7 @@ _UUID_RE = re.compile(
 
 
 def _resolve_workday_oauth_client_id(client_id: str) -> str:
-    """Workday often displays the API client ID as Base64(UUID); the token endpoint expects the UUID string in Basic auth."""
+    """Workday often displays the API client ID as Base64(UUID); the token endpoint expects the UUID string."""
     s = (client_id or "").strip()
     if _UUID_RE.match(s):
         return s
@@ -110,7 +122,6 @@ def raas_config_uses_oauth(config: Dict[str, Any]) -> bool:
 
 
 def _token_client_id(client_id_raw: str, client_id_format: str) -> str:
-    """Resolve client_id for the token endpoint (auto = Base64→UUID when applicable)."""
     fmt = (client_id_format or "auto").strip().lower()
     if fmt == "raw":
         return (client_id_raw or "").strip()
@@ -119,15 +130,50 @@ def _token_client_id(client_id_raw: str, client_id_format: str) -> str:
     return _resolve_workday_oauth_client_id(client_id_raw)
 
 
-def _oauth_access_token_cache_settings(config: Dict[str, Any]) -> Tuple[int, int]:
-    """
-    Seconds to reuse a cached access token before refreshing.
+def _config_str(config: Dict[str, Any], key: str, default: str = "") -> str:
+    value = config.get(key)
+    if not value:
+        value = default
+    return str(value).strip().lower()
 
-    Workday returns ``expires_in`` on the token response; we stop reusing the access token
-    ``oauth_access_token_refresh_leeway_seconds`` before that (default 60). Lower values keep
-    the same access token longer. ``oauth_access_token_min_cache_seconds`` is the minimum
-    cache window when ``expires_in - leeway`` would otherwise be very small (default 60).
-    """
+
+def _parse_oauth_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate OAuth settings and return normalized values for the token provider."""
+    for key in ("client_id", "client_secret", "token_url"):
+        if not config.get(key):
+            raise ValueError(f"OAuth auth requires {key} in config")
+
+    grant_type = _config_str(config, "oauth_grant_type", "client_credentials")
+    if grant_type not in ("refresh_token", "client_credentials"):
+        raise ValueError("oauth_grant_type must be refresh_token or client_credentials")
+    if grant_type == "refresh_token" and not config.get("refresh_token"):
+        raise ValueError("refresh_token is required when oauth_grant_type is refresh_token")
+    if grant_type == "client_credentials" and config.get("refresh_token"):
+        raise ValueError(
+            "OAuth config includes refresh_token but oauth_grant_type is client_credentials. "
+            "For Workday API clients using Authorization Code (refresh tokens), set oauth_grant_type to "
+            "refresh_token. For client_credentials-only clients, remove refresh_token from config."
+        )
+
+    client_id_format = _config_str(config, "oauth_client_id_format", "auto")
+    if client_id_format not in ("auto", "raw", "uuid"):
+        raise ValueError("oauth_client_id_format must be 'auto', 'raw', or 'uuid'")
+
+    token_client_auth = _config_str(config, "oauth_token_client_auth", "basic")
+    if token_client_auth not in ("basic", "post_body"):
+        raise ValueError("oauth_token_client_auth must be 'basic' or 'post_body'")
+
+    leeway, min_cache = _oauth_access_token_cache_settings(config)
+    return {
+        "grant_type": grant_type,
+        "token_client_auth": token_client_auth,
+        "client_id_format": client_id_format,
+        "leeway": leeway,
+        "min_cache": min_cache,
+    }
+
+
+def _oauth_access_token_cache_settings(config: Dict[str, Any]) -> Tuple[int, int]:
     if config.get("oauth_access_token_refresh_leeway_seconds") is not None:
         leeway = int(config["oauth_access_token_refresh_leeway_seconds"])
         if leeway < 0 or leeway > 86400:
@@ -141,6 +187,17 @@ def _oauth_access_token_cache_settings(config: Dict[str, Any]) -> Tuple[int, int
     else:
         min_cache = 60
     return leeway, min_cache
+
+
+def _oauth_access_token_cache_ttl_seconds(
+    expires_in: int,
+    refresh_leeway_seconds: int,
+    min_cache_seconds: int,
+) -> int:
+    ttl = expires_in - refresh_leeway_seconds
+    if ttl < min_cache_seconds:
+        ttl = min_cache_seconds
+    return ttl
 
 
 class WorkdayOAuthTokenProvider:
@@ -171,6 +228,7 @@ class WorkdayOAuthTokenProvider:
         self._verify = verify
         self._token_client_auth = token_client_auth.strip().lower()
         self._client_id_format = (client_id_format or "auto").strip().lower()
+        self._token_client_id_for_auth: Optional[str] = None
         self._http = session or requests.Session()
         self._lock = threading.Lock()
         self._access_token: Optional[str] = None
@@ -181,30 +239,19 @@ class WorkdayOAuthTokenProvider:
 
     @classmethod
     def from_config(cls, config: Dict[str, Any], verify: bool = True) -> WorkdayOAuthTokenProvider:
-        grant = (config.get("oauth_grant_type") or "client_credentials").strip().lower()
-        if grant not in ("refresh_token", "client_credentials"):
-            raise ValueError("oauth_grant_type must be 'refresh_token' or 'client_credentials'")
-        if grant == "refresh_token" and not config.get("refresh_token"):
-            raise ValueError("refresh_token is required when oauth_grant_type is refresh_token")
-        auth_mode = (config.get("oauth_token_client_auth") or "basic").strip().lower()
-        if auth_mode not in ("basic", "post_body"):
-            raise ValueError("oauth_token_client_auth must be 'basic' or 'post_body'")
-        id_fmt = (config.get("oauth_client_id_format") or "auto").strip().lower()
-        if id_fmt not in ("auto", "raw", "uuid"):
-            raise ValueError("oauth_client_id_format must be 'auto', 'raw', or 'uuid'")
-        leeway, min_cache = _oauth_access_token_cache_settings(config)
+        oauth = _parse_oauth_config(config)
         return cls(
             client_id=config["client_id"],
             client_secret=config["client_secret"],
             token_url=config["token_url"],
-            grant_type=grant,
+            grant_type=oauth["grant_type"],
             refresh_token=config.get("refresh_token"),
             scope=config.get("oauth_scope"),
             verify=verify,
-            token_client_auth=auth_mode,
-            client_id_format=id_fmt,
-            access_token_refresh_leeway_seconds=leeway,
-            access_token_min_cache_seconds=min_cache,
+            token_client_auth=oauth["token_client_auth"],
+            client_id_format=oauth["client_id_format"],
+            access_token_refresh_leeway_seconds=oauth["leeway"],
+            access_token_min_cache_seconds=oauth["min_cache"],
         )
 
     def apply_to_session(self, session: requests.Session) -> None:
@@ -229,9 +276,7 @@ class WorkdayOAuthTokenProvider:
             return self._access_token
 
     def _post_token(self, data: Dict[str, str], client_id_for_auth: str) -> requests.Response:
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-        }
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
         post_data = dict(data)
         if self._token_client_auth == "post_body":
             post_data["client_id"] = client_id_for_auth
@@ -246,108 +291,111 @@ class WorkdayOAuthTokenProvider:
             timeout=120,
         )
 
-    def _fetch_token_locked(self) -> None:
+    def _token_request_body(self) -> Dict[str, str]:
         data: Dict[str, str] = {"grant_type": self._grant_type}
         if self._grant_type == "refresh_token":
             data["refresh_token"] = self._refresh_token or ""
         if self._scope:
             data["scope"] = self._scope
+        return data
 
-        client_ids_to_try = [self._client_id]
+    def _client_ids_for_token_request(self) -> list:
+        if self._token_client_id_for_auth:
+            return [self._token_client_id_for_auth]
+        ids = [self._client_id]
         if (
             self._grant_type == "refresh_token"
             and self._client_id_format == "auto"
+            and self._client_id_raw
             and self._client_id_raw != self._client_id
         ):
-            client_ids_to_try.append(self._client_id_raw)
+            ids.append(self._client_id_raw)
+        return ids
 
+    def _post_token_trying_client_ids(
+        self, data: Dict[str, str], client_ids: list
+    ) -> Tuple[Optional[requests.Response], Optional[str]]:
         resp = None
         try:
-            for i, cid in enumerate(client_ids_to_try):
-                resp = self._post_token(data, cid)
+            for i, client_id in enumerate(client_ids):
+                resp = self._post_token(data, client_id)
                 if resp.status_code < 400:
-                    break
+                    return resp, client_id
                 if (
-                    resp.status_code == 401
-                    and i == 0
-                    and len(client_ids_to_try) > 1
-                    and "invalid_client" in (resp.text or "").lower()
+                    resp.status_code in (400, 401)
+                    and i < len(client_ids) - 1
+                    and _oauth_token_error_is(resp.text, "invalid_client")
                 ):
                     continue
                 break
         except requests.exceptions.RequestException as e:
-            raise WorkdayOAuthError("Token request failed: {}".format(e)) from e
+            raise WorkdayOAuthError(f"Token request failed: {e}") from e
+        return resp, None
 
-        if resp is None:
-            raise WorkdayOAuthError("Token request returned no response")
-        if resp.status_code >= 400:
-            body_snip = (resp.text or "").strip()
-            msg = "Token endpoint error: HTTP {}".format(resp.status_code)
-            if body_snip:
-                msg = "{} — {}".format(msg, body_snip[:1000])
-            if self._grant_type == "refresh_token" and _oauth_refresh_token_rejected(
-                resp.status_code, resp.text
-            ):
-                msg = (
-                    "Please update your Workday OAuth credentials: the refresh token is no longer valid "
-                    "(expired, revoked, or rotated). Obtain a new refresh token in Workday and update your "
-                    "configuration. Details: "
-                    + msg
-                )
-                raise WorkdayRefreshTokenInvalidError(
-                    msg,
-                    status_code=resp.status_code,
-                    response_body=resp.text,
-                )
-            raise WorkdayOAuthError(
+    def _raise_token_endpoint_error(self, resp: requests.Response) -> None:
+        body_snip = (resp.text or "").strip()
+        msg = f"Token endpoint error: HTTP {resp.status_code}"
+        if body_snip:
+            msg = f"{msg} — {body_snip[:1000]}"
+        if self._grant_type == "refresh_token" and _oauth_refresh_token_rejected(
+            resp.status_code, resp.text
+        ):
+            msg = (
+                "Please update your Workday OAuth credentials: the refresh token is no longer valid "
+                "(expired, revoked, or rotated). Obtain a new refresh token in Workday and update your "
+                f"configuration. Details: {msg}"
+            )
+            raise WorkdayRefreshTokenInvalidError(
                 msg,
                 status_code=resp.status_code,
                 response_body=resp.text,
             )
+        raise WorkdayOAuthError(
+            msg,
+            status_code=resp.status_code,
+            response_body=resp.text,
+        )
+
+    def _save_access_token(self, resp: requests.Response, winning_client_id: Optional[str]) -> None:
         try:
             body = resp.json()
         except json.JSONDecodeError as e:
-            raise WorkdayOAuthError("Token response was not JSON: {}".format(resp.text[:500])) from e
+            raise WorkdayOAuthError(f"Token response was not JSON: {resp.text[:500]}") from e
         access = body.get("access_token")
         if not access:
-            raise WorkdayOAuthError("Token response missing access_token: {}".format(body))
+            raise WorkdayOAuthError(f"Token response missing access_token: {body}")
         self._access_token = access
+        if winning_client_id is not None:
+            self._token_client_id_for_auth = winning_client_id
         expires_in = int(body.get("expires_in", 3600))
-        skew = expires_in - self._access_token_refresh_leeway_seconds
-        if skew < self._access_token_min_cache_seconds:
-            skew = self._access_token_min_cache_seconds
-        self._expires_at = time.time() + float(skew)
+        ttl = _oauth_access_token_cache_ttl_seconds(
+            expires_in,
+            self._access_token_refresh_leeway_seconds,
+            self._access_token_min_cache_seconds,
+        )
+        self._expires_at = time.time() + float(ttl)
         if self._session_ref is not None:
             self._session_ref.headers["Authorization"] = "Bearer " + self._access_token
+
+    def _fetch_token_locked(self) -> None:
+        data = self._token_request_body()
+        client_ids = self._client_ids_for_token_request()
+
+        resp, winning_client_id = self._post_token_trying_client_ids(data, client_ids)
+        if resp is None:
+            raise WorkdayOAuthError("Token request returned no response")
+        if resp.status_code >= 400:
+            self._raise_token_endpoint_error(resp)
+
+        self._save_access_token(resp, winning_client_id)
 
 
 def validate_raas_tap_config(config: Dict[str, Any]) -> None:
     """Ensure reports plus either basic or OAuth credentials."""
     if not config.get("reports"):
         raise ValueError("Missing required config key: reports")
-    uses_oauth = raas_config_uses_oauth(config)
-    if uses_oauth:
-        for key in ("client_id", "client_secret", "token_url"):
-            if not config.get(key):
-                raise ValueError("OAuth auth requires {} in config".format(key))
-        grant = (config.get("oauth_grant_type") or "client_credentials").strip().lower()
-        if grant not in ("refresh_token", "client_credentials"):
-            raise ValueError("oauth_grant_type must be refresh_token or client_credentials")
-        if grant == "refresh_token" and not config.get("refresh_token"):
-            raise ValueError("refresh_token is required when oauth_grant_type is refresh_token")
-        if grant == "client_credentials" and config.get("refresh_token"):
-            raise ValueError(
-                "OAuth config includes refresh_token but oauth_grant_type is client_credentials. "
-                "For Workday API clients using Authorization Code (refresh tokens), set oauth_grant_type to "
-                "refresh_token. For client_credentials-only clients, remove refresh_token from config."
-            )
-        id_fmt = (config.get("oauth_client_id_format") or "auto").strip().lower()
-        if id_fmt not in ("auto", "raw", "uuid"):
-            raise ValueError("oauth_client_id_format must be 'auto', 'raw', or 'uuid'")
-        auth_mode = (config.get("oauth_token_client_auth") or "basic").strip().lower()
-        if auth_mode not in ("basic", "post_body"):
-            raise ValueError("oauth_token_client_auth must be 'basic' or 'post_body'")
-        _oauth_access_token_cache_settings(config)
+    if raas_config_uses_oauth(config):
+        _parse_oauth_config(config)
     else:
         if not config.get("username") or not config.get("password"):
             raise ValueError("Basic auth requires username and password in config")
