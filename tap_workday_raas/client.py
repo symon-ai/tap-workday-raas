@@ -5,7 +5,6 @@ from tap_workday_raas.symon_exception import SymonException
 from tap_workday_raas.oauth_middleware import (
     WorkdayOAuthError,
     WorkdayOAuthTokenProvider,
-    WorkdayRefreshTokenInvalidError,
     raas_config_uses_oauth,
     workday_oauth_error_details,
 )
