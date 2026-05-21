@@ -64,7 +64,7 @@ class _GetContext:
 
 
 class TestWrapOAuthError(unittest.TestCase):
-    def test_refresh_token_invalid_preserves_friendly_message(self):
+    def test_refresh_token_invalid_uses_standard_user_message(self):
         friendly = (
             "Please update your Workday OAuth credentials: the refresh token is no longer valid "
             "(expired, revoked, or rotated). Obtain a new refresh token in Workday and update your "
@@ -78,15 +78,19 @@ class TestWrapOAuthError(unittest.TestCase):
         )
         wrapped = _wrap_oauth_error(exc)
         self.assertIsInstance(wrapped, SymonException)
-        self.assertEqual(str(wrapped), friendly)
-        self.assertNotIn("Check client_id", str(wrapped))
+        self.assertEqual(
+            str(wrapped),
+            "The Workday OAuth token request failed. Check the token configuration and expiration.",
+        )
 
-    def test_other_oauth_400_uses_exception_message_not_raw_body(self):
+    def test_other_oauth_400_uses_standard_user_message(self):
         msg = 'Token endpoint error: HTTP 400 — {"error":"invalid_client"}'
         exc = WorkdayOAuthError(msg, status_code=400, response_body='{"error":"invalid_client"}')
         wrapped = _wrap_oauth_error(exc)
-        self.assertIn(msg, str(wrapped))
-        self.assertNotEqual(str(wrapped).strip(), '{"error":"invalid_client"}')
+        self.assertEqual(
+            str(wrapped),
+            "The Workday OAuth token request failed. Check the token configuration and expiration.",
+        )
 
 
 class TestStreamReportOAuth(unittest.TestCase):

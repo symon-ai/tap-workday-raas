@@ -25,20 +25,13 @@ def _session_for_config(config):
     return session, None
 
 
+WORKDAY_OAUTH_TOKEN_REQUEST_FAILED_MESSAGE = (
+    "The Workday OAuth token request failed. Check the token configuration and expiration."
+)
+
+
 def _wrap_oauth_error(exc):
-    if isinstance(exc, WorkdayRefreshTokenInvalidError):
-        return SymonException(str(exc), "workday.OAuthError")
-    if exc.status_code in (400, 401):
-        return SymonException(
-            "OAuth token request failed. Check client_id, client_secret, refresh_token, and token_url. {}".format(
-                str(exc)
-            ),
-            "workday.OAuthError",
-        )
-    return SymonException(
-        "OAuth token request failed: {}".format(exc),
-        "workday.OAuthError",
-    )
+    return SymonException(WORKDAY_OAUTH_TOKEN_REQUEST_FAILED_MESSAGE, "workday.OAuthError")
 
 
 def stream_report(report_url, config):
