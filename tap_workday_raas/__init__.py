@@ -5,11 +5,13 @@ import traceback
 
 from singer import metadata
 from singer import utils
+from singer.catalog import Catalog
 from tap_workday_raas.discover import discover_streams
 from tap_workday_raas.symon_exception import SymonException
 from tap_workday_raas.sync import sync_report
+from tap_workday_raas.oauth_middleware import validate_raas_tap_config
 
-REQUIRED_CONFIG_KEYS = ["username", "password", "reports"]
+REQUIRED_CONFIG_KEYS = ["reports"]
 LOGGER = singer.get_logger()
 
 # for symon error logging
@@ -62,11 +64,19 @@ def main():
         error_info = None
 
         args = utils.parse_args(REQUIRED_CONFIG_KEYS)
+        try:
+            validate_raas_tap_config(args.config)
+        except ValueError as err:
+            raise SymonException(str(err), "workday.InvalidConfig") from err
+
+        catalog = args.catalog
+        if catalog is None and args.properties is not None:
+            catalog = Catalog.from_dict(args.properties)
 
         if args.discover:
             do_discover(args.config)
-        elif args.catalog or args.properties:
-            do_sync(args.config, args.catalog, args.state)
+        elif catalog:
+            do_sync(args.config, catalog, args.state)
     except SymonException as e:
         exc_type, exc_value, exc_traceback = sys.exc_info()
         error_info = {

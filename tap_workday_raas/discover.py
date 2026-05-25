@@ -4,7 +4,9 @@ import singer
 
 from singer import metadata
 
-from tap_workday_raas.client import download_xsd
+from tap_workday_raas.client import download_xsd, _session_for_config, _wrap_oauth_error
+from tap_workday_raas.oauth_middleware import WorkdayOAuthError
+from tap_workday_raas.symon_exception import SymonException
 
 LOGGER = singer.get_logger()
 
@@ -105,14 +107,20 @@ def discover_streams(config):
 
     reports = config["reports"]
 
-    username = config["username"]
-    password = config["password"]
+    try:
+        session, oauth_provider = _session_for_config(config)
+    except ValueError as e:
+        raise SymonException(str(e), "workday.InvalidConfig")
+    except WorkdayOAuthError as e:
+        raise _wrap_oauth_error(e)
 
     for report in reports:
         LOGGER.info('Downloading XSD to determine table schema "%s".',
                     report["report_name"])
 
-        xsd = download_xsd(report["report_url"], username, password)
+        xsd = download_xsd(
+            report["report_url"], config, session=session, oauth_provider=oauth_provider
+        )
         schema = generate_schema_for_report(xsd)
 
         stream_md = metadata.get_standard_metadata(schema,
