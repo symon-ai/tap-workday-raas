@@ -189,6 +189,22 @@ def _oauth_access_token_cache_settings(config: Dict[str, Any]) -> Tuple[int, int
     return leeway, min_cache
 
 
+def _seed_access_token_from_config(
+    provider: "WorkdayOAuthTokenProvider",
+    config: Dict[str, Any],
+    leeway: int,
+    min_cache: int,
+) -> None:
+    """Use a platform-supplied access token until cache TTL expires."""
+    access = config.get("access_token")
+    if not access or not str(access).strip():
+        return
+    provider._access_token = str(access).strip()
+    expires_in = int(config.get("oauth_access_token_expires_in", 3600))
+    ttl = _oauth_access_token_cache_ttl_seconds(expires_in, leeway, min_cache)
+    provider._expires_at = time.time() + float(ttl)
+
+
 def _oauth_access_token_cache_ttl_seconds(
     expires_in: int,
     refresh_leeway_seconds: int,
@@ -240,7 +256,7 @@ class WorkdayOAuthTokenProvider:
     @classmethod
     def from_config(cls, config: Dict[str, Any], verify: bool = True) -> WorkdayOAuthTokenProvider:
         oauth = _parse_oauth_config(config)
-        return cls(
+        provider = cls(
             client_id=config["client_id"],
             client_secret=config["client_secret"],
             token_url=config["token_url"],
@@ -253,6 +269,8 @@ class WorkdayOAuthTokenProvider:
             access_token_refresh_leeway_seconds=oauth["leeway"],
             access_token_min_cache_seconds=oauth["min_cache"],
         )
+        _seed_access_token_from_config(provider, config, oauth["leeway"], oauth["min_cache"])
+        return provider
 
     def apply_to_session(self, session: requests.Session) -> None:
         self._session_ref = session

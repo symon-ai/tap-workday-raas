@@ -309,3 +309,24 @@ class TestTokenProvider(unittest.TestCase):
         p.force_refresh()
         self.assertEqual(session.headers["Authorization"], "Bearer tok2")
         self.assertEqual(mock_http.post.call_count, 2)
+
+
+class TestPreSuppliedAccessToken(unittest.TestCase):
+    @mock.patch.object(_oauth_mod, "time")
+    def test_from_config_uses_access_token_without_post(self, mock_time):
+        mock_time.time.return_value = 1000.0
+        mock_http = mock.Mock()
+        config = {
+            "client_id": "id",
+            "client_secret": "sec",
+            "token_url": "https://wd.example.com/ccx/oauth2/t/token",
+            "oauth_grant_type": "refresh_token",
+            "refresh_token": "rt",
+            "reports": [{"report_name": "r"}],
+            "access_token": "platform-tok",
+            "oauth_access_token_expires_in": 3600,
+        }
+        provider = WorkdayOAuthTokenProvider.from_config(config, verify=False)
+        provider._http = mock_http
+        self.assertEqual(provider.get_access_token(), "platform-tok")
+        mock_http.post.assert_not_called()
