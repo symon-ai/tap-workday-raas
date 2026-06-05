@@ -189,6 +189,40 @@ def _oauth_access_token_cache_settings(config: Dict[str, Any]) -> Tuple[int, int
     return leeway, min_cache
 
 
+def _seed_access_token_from_config(
+    provider: "WorkdayOAuthTokenProvider",
+    config: Dict[str, Any],
+    leeway: int,
+    min_cache: int,
+) -> None:
+    """Use a platform-supplied access token until cache TTL expires."""
+    access = config.get("access_token")
+    if not access or not str(access).strip():
+        return
+    if config.get("oauth_access_token_expires_in") is not None:
+        expires_in = int(config["oauth_access_token_expires_in"])
+        if expires_in < 1 or expires_in > 86400:
+            raise ValueError(
+                "oauth_access_token_expires_in must be between 1 and 86400 inclusive"
+            )
+    else:
+        expires_in = 3600
+    token = str(access).strip()
+    ttl = _oauth_access_token_cache_ttl_seconds(expires_in, leeway, min_cache)
+    # Currently only called from from_config (pre-apply, single-threaded construction), but the
+    # update is wrapped to stay safe if this is ever invoked after apply_to_session has linked
+    # a session:
+    #   - lock keeps (_access_token, _expires_at) updates atomic against _save_access_token in
+    #     _fetch_token_locked, which mutates the same fields under this lock.
+    #   - mirror _save_access_token by syncing the linked session's Authorization header so
+    #     callers do not authenticate with a stale Bearer until the next cache-TTL refresh.
+    with provider._lock:
+        provider._access_token = token
+        provider._expires_at = time.time() + float(ttl)
+        if provider._session_ref is not None:
+            provider._session_ref.headers["Authorization"] = "Bearer " + token
+
+
 def _oauth_access_token_cache_ttl_seconds(
     expires_in: int,
     refresh_leeway_seconds: int,
@@ -240,7 +274,7 @@ class WorkdayOAuthTokenProvider:
     @classmethod
     def from_config(cls, config: Dict[str, Any], verify: bool = True) -> WorkdayOAuthTokenProvider:
         oauth = _parse_oauth_config(config)
-        return cls(
+        provider = cls(
             client_id=config["client_id"],
             client_secret=config["client_secret"],
             token_url=config["token_url"],
@@ -253,6 +287,8 @@ class WorkdayOAuthTokenProvider:
             access_token_refresh_leeway_seconds=oauth["leeway"],
             access_token_min_cache_seconds=oauth["min_cache"],
         )
+        _seed_access_token_from_config(provider, config, oauth["leeway"], oauth["min_cache"])
+        return provider
 
     def apply_to_session(self, session: requests.Session) -> None:
         self._session_ref = session
