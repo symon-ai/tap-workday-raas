@@ -1,9 +1,11 @@
 import importlib.util
 import json
 import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 _ERROR_LOGGING_PATH = (
@@ -61,6 +63,55 @@ class TestErrorLogging(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     write_error_file("tapError.json", {"message": "failed"})
                 self.assertEqual("unchanged", protected_file.read_text(encoding="utf-8"))
+            finally:
+                os.chdir(original_directory)
+
+    @unittest.skipUnless(hasattr(os, "O_DIRECTORY"), "O_DIRECTORY is unavailable")
+    def test_parent_replacement_does_not_escape_verified_directory(self):
+        with tempfile.TemporaryDirectory() as working_directory:
+            original_directory = os.getcwd()
+            try:
+                os.chdir(working_directory)
+                Path("errors").mkdir()
+                Path("outside").mkdir()
+                real_open = os.open
+
+                def replace_parent(path, flags, *args, **kwargs):
+                    descriptor = real_open(path, flags, *args, **kwargs)
+                    if path == "errors" and kwargs.get("dir_fd") is not None:
+                        Path("errors").rename("verified-errors")
+                        Path("errors").symlink_to("outside", target_is_directory=True)
+                    return descriptor
+
+                with mock.patch.object(_error_logging.os, "open", side_effect=replace_parent):
+                    write_error_file("errors/tapError.json", {"message": "failed"})
+
+                self.assertTrue(Path("verified-errors/tapError.json").is_file())
+                self.assertFalse(Path("outside/tapError.json").exists())
+            finally:
+                os.chdir(original_directory)
+
+    def test_fails_closed_without_descriptor_relative_open(self):
+        with mock.patch.object(_error_logging, "_OPEN_SUPPORTS_DIR_FD", False):
+            with self.assertRaises(RuntimeError):
+                write_error_file("tapError.json", {"message": "failed"})
+
+    def test_existing_file_permissions_are_restricted(self):
+        with tempfile.TemporaryDirectory() as working_directory:
+            original_directory = os.getcwd()
+            try:
+                os.chdir(working_directory)
+                error_path = Path("tapError.json")
+                error_path.write_text("old", encoding="utf-8")
+                error_path.chmod(0o666)
+
+                write_error_file(error_path, {"message": "updated"})
+
+                self.assertEqual(0o600, stat.S_IMODE(error_path.stat().st_mode))
+                self.assertEqual(
+                    {"message": "updated"},
+                    json.loads(error_path.read_text(encoding="utf-8")),
+                )
             finally:
                 os.chdir(original_directory)
 
