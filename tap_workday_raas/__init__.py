@@ -7,6 +7,7 @@ from singer import metadata
 from singer import utils
 from singer.catalog import Catalog
 from tap_workday_raas.discover import discover_streams
+from tap_workday_raas.error_logging import write_error_file
 from tap_workday_raas.symon_exception import SymonException
 from tap_workday_raas.sync import sync_report
 from tap_workday_raas.oauth_middleware import validate_raas_tap_config
@@ -101,8 +102,7 @@ def main():
                 error_file_path = args.config.get('error_file_path', None)
                 if error_file_path is not None:
                     try:
-                        with open(error_file_path, 'w', encoding='utf-8') as fp:
-                            json.dump(error_info, fp)
+                        write_error_file(error_file_path, error_info)
                     except:
                         pass
                 # log error info as well in case file is corrupted
