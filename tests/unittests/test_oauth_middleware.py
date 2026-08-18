@@ -80,6 +80,28 @@ class TestRaasConfig(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_raas_tap_config({"username": "u", "password": "p"})
 
+    def test_validate_accepts_api_base_url(self):
+        validate_raas_tap_config(
+            {
+                "username": "u",
+                "password": "p",
+                "reports": [{"report_name": "r"}],
+                "api_base_url": "https://api-proxy.example.com/workday",
+            }
+        )
+
+    def test_validate_rejects_invalid_api_base_url(self):
+        with self.assertRaises(ValueError) as ctx:
+            validate_raas_tap_config(
+                {
+                    "username": "u",
+                    "password": "p",
+                    "reports": [{"report_name": "r"}],
+                    "api_base_url": "not-a-url",
+                }
+            )
+        self.assertIn("api_base_url", str(ctx.exception))
+
     def test_validate_oauth_token_cache_settings_ok(self):
         validate_raas_tap_config(
             {

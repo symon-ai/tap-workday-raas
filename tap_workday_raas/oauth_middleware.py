@@ -9,6 +9,7 @@ import re
 import threading
 import time
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import urlparse
 
 import requests
 
@@ -430,6 +431,13 @@ def validate_raas_tap_config(config: Dict[str, Any]) -> None:
     """Ensure reports plus either basic or OAuth credentials."""
     if not config.get("reports"):
         raise ValueError("Missing required config key: reports")
+    api_base_url = config.get("api_base_url")
+    if api_base_url is not None and str(api_base_url).strip():
+        parsed = urlparse(str(api_base_url).strip())
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(
+                "api_base_url must be a valid http(s) URL, got: {!r}".format(api_base_url)
+            )
     if raas_config_uses_oauth(config):
         _parse_oauth_config(config)
     else:

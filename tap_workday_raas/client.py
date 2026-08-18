@@ -1,3 +1,6 @@
+import re
+from urllib.parse import urlparse
+
 import requests
 import ijson.backends.yajl2_c as ijson
 import ijson as ijson_core
@@ -8,6 +11,84 @@ from tap_workday_raas.oauth_middleware import (
     raas_config_uses_oauth,
     workday_oauth_error_details,
 )
+
+
+# Native Workday REST bases look like .../ccx/api/v1/{tenant} (version may vary).
+_REST_API_PATH_RE = re.compile(
+    r"^(?P<prefix>.*?)/ccx/api(?:/v\d+)?(?:/(?P<tenant>[^/]+))?$",
+    re.IGNORECASE,
+)
+
+# RaaS report paths are .../ccx/service/customreport2/{tenant}/{owner}/{report}.
+_SERVICE_PATH_MARKER = "/ccx/service/"
+
+
+def resolve_raas_service_root(api_base_url):
+    """Derive the RaaS service root (`.../ccx/service`) from ``api_base_url``.
+
+    Native Workday REST endpoints (`.../ccx/api/v1/{tenant}`) are converted to the
+    service path on the same origin (preserving any proxy path prefix before
+    `/ccx/api`). Opaque customer proxy bases append `/ccx/service`.
+    """
+    raw = (api_base_url or "").strip().rstrip("/")
+    parsed = urlparse(raw)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError(
+            "api_base_url must be a valid http(s) URL, got: {!r}".format(api_base_url)
+        )
+
+    path = (parsed.path or "").rstrip("/")
+    match = _REST_API_PATH_RE.match(path)
+    if match:
+        prefix = match.group("prefix") or ""
+        return "{}://{}{}/ccx/service".format(parsed.scheme, parsed.netloc, prefix)
+
+    return "{}://{}{}/ccx/service".format(parsed.scheme, parsed.netloc, path)
+
+
+def _raas_report_path_fragments(report_url):
+    """Return (path_after_service, query, fragment) from a full RaaS report URL.
+
+    Expected path shape: ``/ccx/service/customreport2/{tenant}/{owner}/{report}``.
+    """
+    parsed = urlparse(report_url)
+    path = parsed.path or ""
+    idx = path.lower().find(_SERVICE_PATH_MARKER)
+    if idx < 0:
+        raise ValueError(
+            "report_url must contain {} path when api_base_url is set, got: {!r}".format(
+                _SERVICE_PATH_MARKER.rstrip("/"),
+                report_url,
+            )
+        )
+    suffix = path[idx + len(_SERVICE_PATH_MARKER) :]
+    if not suffix:
+        raise ValueError(
+            "report_url is missing path fragments after {}, got: {!r}".format(
+                _SERVICE_PATH_MARKER.rstrip("/"),
+                report_url,
+            )
+        )
+    query = "?" + parsed.query if parsed.query else ""
+    fragment = "#" + parsed.fragment if parsed.fragment else ""
+    return suffix, query, fragment
+
+
+def resolve_raas_request_url(url, config):
+    """Resolve the URL used for a RaaS report/XSD request.
+
+    When ``api_base_url`` is absent or blank, the configured ``report_url`` is
+    used as-is (no host rewriting). When ``api_base_url`` is set, the request
+    URL is built from that base plus the expected ``/ccx/service/...`` path
+    fragments taken from ``report_url`` — the report URL host is ignored.
+    """
+    api_base_url = (config.get("api_base_url") or "").strip()
+    if not api_base_url:
+        return url
+
+    service_root = resolve_raas_service_root(api_base_url)
+    suffix, query, fragment = _raas_report_path_fragments(url)
+    return "{}/{}{}{}".format(service_root, suffix, query, fragment)
 
 
 def _session_for_config(config):
@@ -41,8 +122,13 @@ def _wrap_oauth_error(exc):
 def stream_report(report_url, config):
     # Force the format query param to be set to format=json
 
+    try:
+        request_url = resolve_raas_request_url(report_url, config)
+    except ValueError as e:
+        raise SymonException(str(e), "workday.InvalidConfig")
+
     # Split query params off
-    url_breakdown = report_url.split("?")
+    url_breakdown = request_url.split("?")
 
     # Gather all params that are not format
     if len(url_breakdown) == 1:
@@ -98,14 +184,15 @@ def stream_report(report_url, config):
         raise
     except requests.exceptions.ConnectionError as e:
         message = str(e)
+        display_url = corrected_url if (config.get("api_base_url") or "").strip() else report_url
         if "nodename nor servname provided, or not known" in message or "Name or service not known" in message:
             raise SymonException(
-                'The report URL "{}" was not found. Please check the report URL and try again.'.format(report_url),
+                'The report URL "{}" was not found. Please check the report URL and try again.'.format(display_url),
                 "workdayRaaS.WorkdayRaaSInvalidReportURL",
             )
         raise SymonException(
             'Sorry, we couldn\'t connect to the specified report URL "{}". Please ensure all the connection form values are correct.'.format(
-                report_url
+                display_url
             ),
             "workday.ConnectionFailed",
         )
@@ -147,10 +234,15 @@ def _iter_report_json(resp):
 
 
 def download_xsd(report_url, config, session=None, oauth_provider=None):
-    if "?" in report_url:
-        xsds_url = report_url.split("?")[0] + "?xsds"
+    try:
+        request_url = resolve_raas_request_url(report_url, config)
+    except ValueError as e:
+        raise SymonException(str(e), "workday.InvalidConfig")
+
+    if "?" in request_url:
+        xsds_url = request_url.split("?")[0] + "?xsds"
     else:
-        xsds_url = report_url + "?xsds"
+        xsds_url = request_url + "?xsds"
 
     if session is None:
         try:
@@ -183,14 +275,15 @@ def download_xsd(report_url, config, session=None, oauth_provider=None):
         raise
     except requests.exceptions.ConnectionError as e:
         message = str(e)
+        display_url = xsds_url if (config.get("api_base_url") or "").strip() else report_url
         if "nodename nor servname provided, or not known" in message or "Name or service not known" in message:
             raise SymonException(
-                "The report URL {} was not found. Please check the report URL and try again.".format(report_url),
+                "The report URL {} was not found. Please check the report URL and try again.".format(display_url),
                 "workdayRaaS.WorkdayRaaSInvalidReportURL",
             )
         raise SymonException(
             'Sorry, we couldn\'t connect to the specified report URL "{}". Please ensure all the connection form values are correct.'.format(
-                report_url
+                display_url
             ),
             "workday.ConnectionFailed",
         )

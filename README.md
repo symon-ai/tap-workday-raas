@@ -46,6 +46,7 @@ poetry run tap-workday-raas <options>
    - `username` - The username of the workday account with access to the reports to extract
    - `password` - The password of the workday account with access to the reports to extract
    - `reports` -  An array containing a list of objects containing the `report_name` and `report_url`. `report_name` is the name of the stream for the report, and the `report_url` is the URL to the Workday XML REST link for the report you wish to extract.
+   - `api_base_url` (optional) - Workday REST API endpoint or customer proxy URL (e.g. `https://{services-host}.myworkday.com/ccx/api/v1/{tenant}` or `https://api-proxy.example.com/workday`). When unset, each `report_url` is called as-is. When set, the tap builds the request from that base plus the expected `/ccx/service/customreport2/...` path fragments from `report_url` (the report URL host is ignored). Native `/ccx/api/...` REST bases are converted to `/ccx/service/...` on the same origin; opaque proxy bases append `/ccx/service/...`. OAuth `token_url` is unchanged and should point at the proxy separately if needed.
 
    ```json
    {
