@@ -10,6 +10,7 @@ from tap_workday_raas.discover import discover_streams
 from tap_workday_raas.symon_exception import SymonException
 from tap_workday_raas.sync import sync_report
 from tap_workday_raas.oauth_middleware import validate_raas_tap_config
+from tap_workday_raas.path_safety import resolve_safe_error_file_path
 
 REQUIRED_CONFIG_KEYS = ["reports"]
 LOGGER = singer.get_logger()
@@ -98,7 +99,12 @@ def main():
     finally:
         if error_info is not None:
             try:
-                error_file_path = args.config.get('error_file_path', None)
+                # error_file_path is user/config-supplied (tainted); validate it
+                # so a crafted path cannot escape the platform-controlled base
+                # directory (CWE-73). An unsafe/invalid path is skipped (returns
+                # None); we still fall through to marker-based logging below.
+                error_file_path = resolve_safe_error_file_path(
+                    args.config.get('error_file_path', None))
                 if error_file_path is not None:
                     try:
                         with open(error_file_path, 'w', encoding='utf-8') as fp:

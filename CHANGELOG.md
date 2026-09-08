@@ -1,5 +1,8 @@
 # Changelog
 
+## 3.5.0
+  * Remediate CWE-73 (external control of file name/path): validate the config-supplied `error_file_path` through a centralized `resolve_safe_error_file_path` helper so a crafted path cannot escape the platform-controlled base directory before `open()`. Unsafe paths are skipped (write is non-fatal) and error info still surfaces via markers. [WP-33350]
+
 ## 1.0.2
   * Updates ijson version [#13](https://github.com/singer-io/tap-workday-raas/pull/13)
 ## 1.0.1
