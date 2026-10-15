@@ -9,6 +9,7 @@ import re
 import threading
 import time
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
@@ -268,6 +269,8 @@ class WorkdayOAuthTokenProvider:
         self._access_token: Optional[str] = None
         self._expires_at: float = 0.0
         self._session_ref: Optional[requests.Session] = None
+        self.instance_url: Optional[str] = None
+        self.service_url: Optional[str] = None
         self._access_token_refresh_leeway_seconds = int(access_token_refresh_leeway_seconds)
         self._access_token_min_cache_seconds = int(access_token_min_cache_seconds)
 
@@ -287,6 +290,7 @@ class WorkdayOAuthTokenProvider:
             access_token_refresh_leeway_seconds=oauth["leeway"],
             access_token_min_cache_seconds=oauth["min_cache"],
         )
+        provider._update_routing(config)
         _seed_access_token_from_config(provider, config, oauth["leeway"], oauth["min_cache"])
         return provider
 
@@ -310,6 +314,29 @@ class WorkdayOAuthTokenProvider:
             self._fetch_token_locked()
             assert self._access_token is not None
             return self._access_token
+
+    def _update_routing(self, values: Dict[str, Any]) -> None:
+        instance_url = (values.get("instance_url") or "").strip()
+        service_url = (values.get("service_url") or "").strip()
+        if instance_url or service_url:
+            # A new service-only response supersedes an older instance selection.
+            # Responses without routing metadata keep the previous selection.
+            self.instance_url = instance_url or None
+            self.service_url = service_url or None
+
+    def resolve_api_url(self, report_url: str) -> str:
+        base_url = self.instance_url or self.service_url
+        if not base_url:
+            return report_url
+        base = urlsplit(base_url)
+        report = urlsplit(report_url)
+        return urlunsplit((
+            base.scheme,
+            base.netloc,
+            base.path.rstrip("/") + "/" + report.path.lstrip("/"),
+            report.query,
+            report.fragment,
+        ))
 
     def _post_token(self, data: Dict[str, str], client_id_for_auth: str) -> requests.Response:
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
@@ -410,6 +437,7 @@ class WorkdayOAuthTokenProvider:
             self._access_token_min_cache_seconds,
         )
         self._expires_at = time.time() + float(ttl)
+        self._update_routing(body)
         if self._session_ref is not None:
             self._session_ref.headers["Authorization"] = "Bearer " + self._access_token
 

@@ -1,5 +1,8 @@
 # Changelog
 
+## 3.4.1
+  * Route OAuth report and XSD requests through seeded or refreshed `instance_url` / `service_url`, retaining routing when refresh metadata is absent.
+
 ## 1.0.2
   * Updates ijson version [#13](https://github.com/singer-io/tap-workday-raas/pull/13)
 ## 1.0.1

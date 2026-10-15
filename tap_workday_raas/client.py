@@ -64,12 +64,15 @@ def stream_report(report_url, config):
     except WorkdayOAuthError as e:
         raise _wrap_oauth_error(e)
 
+    def _report_url():
+        return oauth_provider.resolve_api_url(corrected_url) if oauth_provider is not None else corrected_url
+
     try:
-        with session.get(corrected_url, stream=True) as resp:
+        with session.get(_report_url(), stream=True) as resp:
             if resp.status_code == 401 and oauth_provider is not None:
                 oauth_provider.force_refresh()
                 resp.close()
-                with session.get(corrected_url, stream=True) as resp2:
+                with session.get(_report_url(), stream=True) as resp2:
                     resp2.raise_for_status()
                     yield from _iter_report_json(resp2)
             else:
@@ -161,7 +164,8 @@ def download_xsd(report_url, config, session=None, oauth_provider=None):
             raise _wrap_oauth_error(e)
 
     def _fetch():
-        return session.get(xsds_url)
+        url = oauth_provider.resolve_api_url(xsds_url) if oauth_provider is not None else xsds_url
+        return session.get(url)
 
     try:
         response = _fetch()

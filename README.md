@@ -67,6 +67,8 @@ If the token endpoint returns **HTTP 400** while credentials look correct, try *
 
 **Long-running syncs (OAuth only):** Optional **`oauth_access_token_refresh_leeway_seconds`** (default `60`) is how many seconds **before** Workday’s `expires_in` the tap stops reusing the cached access token; **lower** values reuse the token longer. Optional **`oauth_access_token_min_cache_seconds`** (default `60`) sets a minimum cache window. They cannot exceed Workday’s real token lifetime. Symon import extraction often uses a **24-hour** per-job timeout on the extraction step, separate from OAuth.
 
+**Customer routing (OAuth only, 3.4.1+):** Keep the complete customer token endpoint in `token_url` and each configured report endpoint in `reports[].report_url`. The app can seed optional `instance_url` and `service_url` alongside `access_token`. A nonempty `instance_url` takes precedence over `service_url`; without either, the configured report URL is used. A token exchange or refresh that returns either routing value replaces the previous selection, while a response that omits both (or returns empty values) retains it. Both report downloads and XSD discovery, including a 401 retry, use the current routing base, preserving its path prefix and appending the original report path. Report queries retain their parameters with `format=json`; XSD requests replace the report query with `?xsds`. Access tokens remain opaque and normal TLS certificate verification stays enabled by default. Basic authentication continues to use the configured report URL unchanged.
+
 ```json
 {
   "auth_type": "oauth",

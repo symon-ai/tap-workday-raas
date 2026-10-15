@@ -114,6 +114,7 @@ class TestStreamReportOAuth(unittest.TestCase):
         provider = mock.Mock()
         provider.get_access_token = mock.Mock(return_value="access-token-1")
         provider.force_refresh = mock.Mock()
+        provider.resolve_api_url.side_effect = lambda url: url
         provider._expires_at = 0.0
 
         def apply_to_session(sess):
@@ -159,6 +160,7 @@ class TestStreamReportOAuth(unittest.TestCase):
         provider = mock.Mock()
         provider.get_access_token = mock.Mock(side_effect=["stale-token", "fresh-token"])
         provider.force_refresh = mock.Mock()
+        provider.resolve_api_url.side_effect = lambda url: url
 
         def apply_to_session(sess):
             sess.headers["Authorization"] = "Bearer " + provider.get_access_token()
