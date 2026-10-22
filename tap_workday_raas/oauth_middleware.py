@@ -9,6 +9,7 @@ import re
 import threading
 import time
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import urlsplit
 
 import requests
 
@@ -98,6 +99,29 @@ def _resolve_workday_oauth_client_id(client_id: str) -> str:
 def _basic_auth_header(client_id: str, client_secret: str) -> str:
     raw = f"{client_id}:{client_secret}".encode("utf-8")
     return "Basic " + base64.b64encode(raw).decode("ascii")
+
+
+def normalize_api_base_url(value: Optional[str]) -> Optional[str]:
+    """Accept customer HTTPS origins or proxy bases without credentials or URL suffixes."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if not isinstance(value, str):
+        raise ValueError("base_url must be an HTTPS URL")
+    value = value.strip()
+    try:
+        parts = urlsplit(value)
+        valid = (
+            parts.scheme == "https" and parts.hostname and parts.port != 0
+            and parts.username is None and parts.password is None
+            and not parts.query and not parts.fragment
+            and not any(c.isspace() or ord(c) < 32 for c in value)
+            and "\\" not in value and "?" not in value and "#" not in value
+        )
+    except ValueError:
+        valid = False
+    if not valid:
+        raise ValueError("base_url must be an HTTPS URL without credentials, query, or fragment")
+    return value.rstrip("/")
 
 
 def raas_config_uses_oauth(config: Dict[str, Any]) -> bool:
@@ -251,6 +275,7 @@ class WorkdayOAuthTokenProvider:
         client_id_format: str = "auto",
         access_token_refresh_leeway_seconds: int = 60,
         access_token_min_cache_seconds: int = 60,
+        base_url: Optional[str] = None,
     ):
         self._client_id_raw = (client_id or "").strip()
         self._client_id = _token_client_id(self._client_id_raw, client_id_format)
@@ -270,6 +295,7 @@ class WorkdayOAuthTokenProvider:
         self._session_ref: Optional[requests.Session] = None
         self._access_token_refresh_leeway_seconds = int(access_token_refresh_leeway_seconds)
         self._access_token_min_cache_seconds = int(access_token_min_cache_seconds)
+        self.base_url = normalize_api_base_url(base_url)
 
     @classmethod
     def from_config(cls, config: Dict[str, Any], verify: bool = True) -> WorkdayOAuthTokenProvider:
@@ -286,6 +312,7 @@ class WorkdayOAuthTokenProvider:
             client_id_format=oauth["client_id_format"],
             access_token_refresh_leeway_seconds=oauth["leeway"],
             access_token_min_cache_seconds=oauth["min_cache"],
+            base_url=config.get("base_url"),
         )
         _seed_access_token_from_config(provider, config, oauth["leeway"], oauth["min_cache"])
         return provider
@@ -400,6 +427,15 @@ class WorkdayOAuthTokenProvider:
         access = body.get("access_token")
         if not access:
             raise WorkdayOAuthError(f"Token response missing access_token: {body}")
+        for key in ("instance_url", "service_url"):
+            endpoint = body.get(key)
+            if endpoint is None or (isinstance(endpoint, str) and not endpoint.strip()):
+                continue
+            try:
+                self.base_url = normalize_api_base_url(endpoint)
+            except ValueError as e:
+                raise WorkdayOAuthError(f"Token response {key} must be a valid HTTPS API base URL") from e
+            break
         self._access_token = access
         if winning_client_id is not None:
             self._token_client_id_for_auth = winning_client_id
@@ -430,6 +466,7 @@ def validate_raas_tap_config(config: Dict[str, Any]) -> None:
     """Ensure reports plus either basic or OAuth credentials."""
     if not config.get("reports"):
         raise ValueError("Missing required config key: reports")
+    normalize_api_base_url(config.get("base_url"))
     if raas_config_uses_oauth(config):
         _parse_oauth_config(config)
     else:

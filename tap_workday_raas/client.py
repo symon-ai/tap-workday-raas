@@ -1,3 +1,5 @@
+from urllib.parse import urlsplit, urlunsplit
+
 import requests
 import ijson.backends.yajl2_c as ijson
 import ijson as ijson_core
@@ -5,6 +7,7 @@ from tap_workday_raas.symon_exception import SymonException
 from tap_workday_raas.oauth_middleware import (
     WorkdayOAuthError,
     WorkdayOAuthTokenProvider,
+    normalize_api_base_url,
     raas_config_uses_oauth,
     workday_oauth_error_details,
 )
@@ -12,6 +15,7 @@ from tap_workday_raas.oauth_middleware import (
 
 def _session_for_config(config):
     """Build a requests.Session with basic auth or OAuth Bearer, and optional OAuth provider for retry."""
+    normalize_api_base_url(config.get("base_url"))
     disable_ssl = config.get("disable_ssl_verification", False)
     verify = not disable_ssl
     session = requests.Session()
@@ -38,24 +42,33 @@ def _wrap_oauth_error(exc):
     )
 
 
+def _report_request_url(report_url, config, oauth_provider):
+    base_url = oauth_provider.base_url if oauth_provider is not None else config.get("base_url")
+    base_url = normalize_api_base_url(base_url)
+    if not base_url:
+        return report_url
+    report = urlsplit(report_url)
+    base = urlsplit(base_url)
+    path = report.path
+    marker = path.find("/ccx/service/")
+    prefix = base.path.split("/ccx/service/", 1)[0].rstrip("/")
+    if marker >= 0:
+        path = path[marker:]
+    elif prefix and (path == prefix or path.startswith(prefix + "/")):
+        path = path[len(prefix):]
+    return urlunsplit((
+        base.scheme, base.netloc,
+        prefix + "/" + path.lstrip("/"),
+        report.query, report.fragment,
+    ))
+
+
 def stream_report(report_url, config):
-    # Force the format query param to be set to format=json
-
-    # Split query params off
-    url_breakdown = report_url.split("?")
-
-    # Gather all params that are not format
-    if len(url_breakdown) == 1:
-        params = []
-    else:
-        params = [x for x in url_breakdown[1].split("&") if not x.startswith("format=")]
-
-    # Add the format param
+    # Force JSON while preserving report prompts and their URL encoding.
+    report = urlsplit(report_url)
+    params = [p for p in report.query.split("&") if p and not p.startswith("format=")]
     params.append("format=json")
-    param_string = "&".join(params)
-
-    # Put the url back together
-    corrected_url = url_breakdown[0] + "?" + param_string
+    corrected_url = urlunsplit((report.scheme, report.netloc, report.path, "&".join(params), report.fragment))
 
     try:
         session, oauth_provider = _session_for_config(config)
@@ -65,11 +78,11 @@ def stream_report(report_url, config):
         raise _wrap_oauth_error(e)
 
     try:
-        with session.get(corrected_url, stream=True) as resp:
+        with session.get(_report_request_url(corrected_url, config, oauth_provider), stream=True) as resp:
             if resp.status_code == 401 and oauth_provider is not None:
                 oauth_provider.force_refresh()
                 resp.close()
-                with session.get(corrected_url, stream=True) as resp2:
+                with session.get(_report_request_url(corrected_url, config, oauth_provider), stream=True) as resp2:
                     resp2.raise_for_status()
                     yield from _iter_report_json(resp2)
             else:
@@ -147,10 +160,10 @@ def _iter_report_json(resp):
 
 
 def download_xsd(report_url, config, session=None, oauth_provider=None):
-    if "?" in report_url:
-        xsds_url = report_url.split("?")[0] + "?xsds"
-    else:
-        xsds_url = report_url + "?xsds"
+    report = urlsplit(report_url)
+    params = [p for p in report.query.split("&") if p and not p.startswith("format=") and p != "xsds"]
+    params.append("xsds")
+    xsds_url = urlunsplit((report.scheme, report.netloc, report.path, "&".join(params), report.fragment))
 
     if session is None:
         try:
@@ -161,12 +174,15 @@ def download_xsd(report_url, config, session=None, oauth_provider=None):
             raise _wrap_oauth_error(e)
 
     def _fetch():
-        return session.get(xsds_url)
+        if oauth_provider is not None:
+            oauth_provider.apply_to_session(session)
+        return session.get(_report_request_url(xsds_url, config, oauth_provider))
 
     try:
         response = _fetch()
         if response.status_code == 401 and oauth_provider is not None:
             oauth_provider.force_refresh()
+            response.close()
             response = _fetch()
         response.raise_for_status()
     except WorkdayOAuthError as e:

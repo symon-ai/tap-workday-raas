@@ -112,6 +112,7 @@ class TestStreamReportOAuth(unittest.TestCase):
         session.headers = {}
 
         provider = mock.Mock()
+        provider.base_url = None
         provider.get_access_token = mock.Mock(return_value="access-token-1")
         provider.force_refresh = mock.Mock()
         provider._expires_at = 0.0
@@ -157,6 +158,7 @@ class TestStreamReportOAuth(unittest.TestCase):
         session.headers = {}
 
         provider = mock.Mock()
+        provider.base_url = None
         provider.get_access_token = mock.Mock(side_effect=["stale-token", "fresh-token"])
         provider.force_refresh = mock.Mock()
 
