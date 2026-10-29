@@ -1,3 +1,5 @@
+from urllib.parse import unquote_plus, urlsplit, urlunsplit
+
 import requests
 import ijson.backends.yajl2_c as ijson
 import ijson as ijson_core
@@ -38,6 +40,33 @@ def _wrap_oauth_error(exc):
     )
 
 
+def _report_request_url(report_url, config, oauth_provider):
+    endpoint = oauth_provider.api_base_url if oauth_provider is not None else None
+    endpoint = endpoint or (config.get("base_url") or "").strip()
+    if not endpoint:
+        return report_url
+    base = urlsplit(endpoint)
+    report = urlsplit(report_url)
+    prefix = base.path.rstrip("/")
+    path = report.path
+    # Keep an existing endpoint prefix, but retain the complete explicit report path.
+    if prefix and path != prefix and not path.startswith(prefix + "/"):
+        path = prefix + "/" + path.lstrip("/")
+    # Endpoint routing keys win collisions; request selectors belong to the request.
+    selectors = {"format", "xsds", "wsdl"}
+    routing = {}
+    for field in base.query.split("&"):
+        key = unquote_plus(field.partition("=")[0])
+        if field and key not in selectors:
+            routing[key] = field
+    query = list(routing.values())
+    query.extend(
+        field for field in report.query.split("&")
+        if field and unquote_plus(field.partition("=")[0]) not in routing
+    )
+    return urlunsplit((base.scheme, base.netloc, path, "&".join(query), report.fragment))
+
+
 def stream_report(report_url, config):
     # Force the format query param to be set to format=json
 
@@ -65,11 +94,13 @@ def stream_report(report_url, config):
         raise _wrap_oauth_error(e)
 
     try:
-        with session.get(corrected_url, stream=True) as resp:
+        request_url = _report_request_url(corrected_url, config, oauth_provider)
+        with session.get(request_url, stream=True) as resp:
             if resp.status_code == 401 and oauth_provider is not None:
                 oauth_provider.force_refresh()
                 resp.close()
-                with session.get(corrected_url, stream=True) as resp2:
+                request_url = _report_request_url(corrected_url, config, oauth_provider)
+                with session.get(request_url, stream=True) as resp2:
                     resp2.raise_for_status()
                     yield from _iter_report_json(resp2)
             else:
@@ -161,7 +192,7 @@ def download_xsd(report_url, config, session=None, oauth_provider=None):
             raise _wrap_oauth_error(e)
 
     def _fetch():
-        return session.get(xsds_url)
+        return session.get(_report_request_url(xsds_url, config, oauth_provider))
 
     try:
         response = _fetch()

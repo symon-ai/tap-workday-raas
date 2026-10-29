@@ -46,6 +46,7 @@ poetry run tap-workday-raas <options>
    - `username` - The username of the workday account with access to the reports to extract
    - `password` - The password of the workday account with access to the reports to extract
    - `reports` -  An array containing a list of objects containing the `report_name` and `report_url`. `report_name` is the name of the stream for the report, and the `report_url` is the URL to the Workday XML REST link for the report you wish to extract.
+   - `base_url` (optional) - Override the report endpoint for both basic auth and OAuth. Omit it or leave it blank to use each report's original URL. Supply an absolute URL, for example `https://workday.example.com` or `https://gateway.example.com/workday?route=customerA`. A base path prefixes the complete report path (without duplicating an existing prefix). Endpoint query parameters are retained on report and schema requests; they take precedence over matching report query keys, and the last endpoint value wins for repeated keys. The `format`, `xsds`, and `wsdl` selectors belong to the request and are ignored in endpoint queries. Sync preserves other report filters and forces `format=json`; discovery replaces the report query with bare `xsds` while retaining endpoint routing parameters.
 
    ```json
    {
@@ -58,6 +59,8 @@ poetry run tap-workday-raas <options>
 ### OAuth (alternative to username / password)
 
 Use an **API Client for Integrations** from Workday. Typical keys: `auth_type`: `"oauth"`, `client_id`, `client_secret`, `token_url` (`https://{your-host}/ccx/oauth2/{tenant}/token`), `oauth_grant_type` (`client_credentials` or `refresh_token`), optional `oauth_scope`, optional `refresh_token` for the refresh grant.
+
+For report and schema requests, a nonblank `instance_url` returned by the OAuth token endpoint takes precedence over `service_url`, then configured `base_url`, then the original report URL. When config includes an `access_token`, its paired config `instance_url` (or nonblank `service_url` fallback) is used from the first request. Each successful token exchange, including a refresh after a report/schema HTTP 401, replaces this endpoint selection; a response without either endpoint clears the seeded or previous endpoint and falls back to configured `base_url` or the original report URL. Base paths and endpoint queries follow the same rules as `base_url`. Keep `token_url` set to the actual OAuth token endpoint; `base_url` does not change where credentials are exchanged.
 
 **Grant type must match the Workday client.** If the client uses **Authorization Code** (you have a **refresh token**), set **`oauth_grant_type` to `refresh_token`** and supply **`refresh_token`**. Do **not** pair `client_credentials` with a refresh token in config—Workday often returns HTTP 400. Use **`client_credentials`** only for clients registered for that grant with **no** `refresh_token` in config.
 

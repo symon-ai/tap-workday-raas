@@ -1,17 +1,9 @@
-import importlib.util
-import sys
 import unittest
-from pathlib import Path
 from unittest import mock
 
 import requests
 
-# Load oauth_middleware without importing tap_workday_raas.__init__ (avoids ijson/yajl).
-_OAUTH_PATH = Path(__file__).resolve().parents[2] / "tap_workday_raas" / "oauth_middleware.py"
-_spec = importlib.util.spec_from_file_location("tap_workday_raas.oauth_middleware", _OAUTH_PATH)
-_oauth_mod = importlib.util.module_from_spec(_spec)
-sys.modules["tap_workday_raas.oauth_middleware"] = _oauth_mod
-_spec.loader.exec_module(_oauth_mod)
+from tap_workday_raas import oauth_middleware as _oauth_mod
 
 WorkdayOAuthTokenProvider = _oauth_mod.WorkdayOAuthTokenProvider
 WorkdayOAuthError = _oauth_mod.WorkdayOAuthError

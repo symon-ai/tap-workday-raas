@@ -219,6 +219,14 @@ def _seed_access_token_from_config(
     with provider._lock:
         provider._access_token = token
         provider._expires_at = time.time() + float(ttl)
+        provider.api_base_url = next(
+            (
+                endpoint.strip()
+                for endpoint in (config.get("instance_url"), config.get("service_url"))
+                if isinstance(endpoint, str) and endpoint.strip()
+            ),
+            None,
+        )
         if provider._session_ref is not None:
             provider._session_ref.headers["Authorization"] = "Bearer " + token
 
@@ -267,6 +275,7 @@ class WorkdayOAuthTokenProvider:
         self._lock = threading.Lock()
         self._access_token: Optional[str] = None
         self._expires_at: float = 0.0
+        self.api_base_url: Optional[str] = None
         self._session_ref: Optional[requests.Session] = None
         self._access_token_refresh_leeway_seconds = int(access_token_refresh_leeway_seconds)
         self._access_token_min_cache_seconds = int(access_token_min_cache_seconds)
@@ -401,6 +410,14 @@ class WorkdayOAuthTokenProvider:
         if not access:
             raise WorkdayOAuthError(f"Token response missing access_token: {body}")
         self._access_token = access
+        self.api_base_url = next(
+            (
+                endpoint.strip()
+                for endpoint in (body.get("instance_url"), body.get("service_url"))
+                if isinstance(endpoint, str) and endpoint.strip()
+            ),
+            None,
+        )
         if winning_client_id is not None:
             self._token_client_id_for_auth = winning_client_id
         expires_in = int(body.get("expires_in", 3600))
