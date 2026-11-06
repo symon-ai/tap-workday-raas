@@ -65,6 +65,9 @@ Refresh responses may update that endpoint; omission retains the last advertised
 endpoint. Basic auth also supports `base_url`.
 Configured or previously advertised prefixes in report URLs from the same API
 origin are replaced on refresh; report paths and query parameters are retained.
+When `base_url` already selects an advertised endpoint, optional
+`configured_base_url` preserves the original configured prefix for stripping from
+same-origin report URLs on the first request. It never selects the routing endpoint.
 
 Use an **API Client for Integrations** from Workday. Typical keys: `auth_type`: `"oauth"`, `client_id`, `client_secret`, `token_url` (`https://{your-host}/ccx/oauth2/{tenant}/token`), `oauth_grant_type` (`client_credentials` or `refresh_token`), optional `oauth_scope`, optional `refresh_token` for the refresh grant.
 

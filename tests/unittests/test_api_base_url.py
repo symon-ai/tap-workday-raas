@@ -1,5 +1,6 @@
 """API routing through real sessions, OAuth refresh and a local HTTP boundary."""
 import json
+import os
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,6 +24,21 @@ class TestApiBaseUrl(unittest.TestCase):
             self.assertTrue(send.call_args.kwargs["verify"])
             self.assertEqual(send.call_args.args[0].headers["Authorization"], "Basic dXNlcjpzZWNyZXQ=")
 
+    def test_configured_prefix_provenance_does_not_select_endpoint(self):
+        for base, source, expected in [
+            ("https://configured.example/api2", "https://configured.example/api1/report?key=value", "https://configured.example/api2/report?key=value"),
+            ("https://configured.example", "https://configured.example/api1/report?key=value", "https://configured.example/report?key=value"),
+            ("https://configured.example/api2", "https://configured.example/api10/report", "https://configured.example/api2/api10/report"),
+            ("https://configured.example/api2", "https://unrelated.example/api1/report", "https://configured.example/api2/api1/report"),
+            (None, "https://configured.example/api1/report", "https://configured.example/api1/report"),
+        ]:
+            with self.subTest(base=base, source=source):
+                session = make_session({"username": "user", "password": "secret", "base_url": base,
+                                        "configured_base_url": "https://configured.example/api1"})[0]
+                with mock.patch.object(session, "send", return_value=requests.Response()) as send:
+                    session.get(source)
+                self.assertEqual(send.call_args.args[0].url, expected)
+
     def test_routing_prefix_is_removed_only_for_matching_origin_and_path_segment(self):
         for source, path in [
             ("https://configured.example/api1/report?key=value", "/api2/report?key=value"),
@@ -34,6 +50,58 @@ class TestApiBaseUrl(unittest.TestCase):
             with mock.patch.object(session, "send", return_value=requests.Response()) as send:
                 session.get(source)
             self.assertEqual(send.call_args.args[0].url, "https://new.example" + path)
+
+    def test_initial_report_and_xsd_replace_configured_prefix(self):
+        fixture_path = os.environ.get("WORKDAY_RAAS_PRODUCED_CONFIG")
+        if fixture_path:
+            with open(fixture_path, encoding="utf-8") as fixture:
+                produced_config = json.load(fixture)
+        else:
+            produced_config = {
+                "auth_type": "oauth", "client_id": "fixture-client", "client_secret": "fixture-secret",
+                "token_url": "https://gateway.example/oauth/token",
+                "access_token": "fixture-access", "refresh_token": "fixture-refresh", "oauth_grant_type": "refresh_token",
+                "base_url": "https://gateway.example/api2",
+                "configured_base_url": "https://gateway.example/api1",
+                "reports": [{"report_name": "PrefixedReport",
+                             "report_url": "https://gateway.example/api1/ccx/service/customreport2/tenant/report?format=json"}],
+            }
+        self.assertEqual(produced_config["base_url"], "https://gateway.example/api2")
+        self.assertEqual(produced_config["configured_base_url"], "https://gateway.example/api1")
+        self.assertEqual(produced_config["access_token"], "fixture-access")
+        observed = []
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_GET(self):
+                observed.append((self.path, self.headers.get("Authorization")))
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"<schema/>" if self.path.endswith("?xsds") else b'{"Report_Entry": [{"id": "1"}]}')
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        root = "http://127.0.0.1:" + str(server.server_port)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            config = dict(produced_config)
+            for key in ("base_url", "configured_base_url", "token_url"):
+                config[key] = config[key].replace("https://gateway.example", root)
+            report_url = config["reports"][0]["report_url"].replace("https://gateway.example", root)
+            for prefix in ("/api2", ""):
+                with self.subTest(endpoint_prefix=prefix):
+                    endpoint = root + prefix
+                    config["base_url"] = endpoint
+                    observed.clear()
+                    self.assertEqual(list(stream_report(report_url, config)), [{"id": "1"}])
+                    self.assertEqual(download_xsd(report_url, config), "<schema/>")
+                    self.assertEqual(observed, [
+                        (prefix + "/ccx/service/customreport2/tenant/report?format=json", "Bearer fixture-access"),
+                        (prefix + "/ccx/service/customreport2/tenant/report?xsds", "Bearer fixture-access"),
+                    ])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
 
     def test_real_report_and_xsd_refresh_replace_previous_configured_prefix(self):
         observed = []

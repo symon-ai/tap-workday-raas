@@ -16,11 +16,14 @@ import requests
 class WorkdayApiSession(requests.Session):
     """Route API traffic without changing token exchange URLs or service paths."""
 
-    def __init__(self, base_url=None):
+    def __init__(self, base_url=None, configured_base_url=None):
         super().__init__()
         self.base_url = base_url
         self.oauth_provider = None
         self._routing_prefixes = set()
+        if configured_base_url:
+            configured = urlsplit(configured_base_url)
+            self._routing_prefixes.add((configured.scheme, configured.netloc.lower(), configured.path.rstrip("/")))
 
     def request(self, method, url, **kwargs):
         base_url = self.base_url
