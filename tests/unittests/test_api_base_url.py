@@ -23,6 +23,61 @@ class TestApiBaseUrl(unittest.TestCase):
             self.assertTrue(send.call_args.kwargs["verify"])
             self.assertEqual(send.call_args.args[0].headers["Authorization"], "Basic dXNlcjpzZWNyZXQ=")
 
+    def test_routing_prefix_is_removed_only_for_matching_origin_and_path_segment(self):
+        for source, path in [
+            ("https://configured.example/api1/report?key=value", "/api2/report?key=value"),
+            ("https://configured.example/api10/report", "/api2/api10/report"),
+            ("https://unrelated.example/api1/report", "/api2/api1/report"),
+        ]:
+            session = WorkdayApiSession("https://configured.example/api1")
+            session.oauth_provider = mock.Mock(api_base_url="https://new.example/api2", get_access_token=lambda: "opaque")
+            with mock.patch.object(session, "send", return_value=requests.Response()) as send:
+                session.get(source)
+            self.assertEqual(send.call_args.args[0].url, "https://new.example" + path)
+
+    def test_real_report_and_xsd_refresh_replace_previous_configured_prefix(self):
+        observed = []
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                observed.append((self.path, self.headers.get("Authorization")))
+                token_number = sum(path == "/token" for path, _ in observed)
+                endpoint = root + ("/api1", "/api2", "/api1", "")[token_number - 1]
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(json.dumps({"access_token": "opaque-" + str(token_number), "instance_url": endpoint}).encode())
+            def do_GET(self):
+                observed.append((self.path, self.headers.get("Authorization")))
+                # Each consumer refreshes once after receiving the first token.
+                self.send_response(401 if self.headers.get("Authorization") in ("Bearer opaque-1", "Bearer opaque-3") else 200)
+                self.end_headers()
+                self.wfile.write(b"<schema/>" if self.path.endswith("?xsds") else b'{"Report_Entry": [{"id": "1"}]}')
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        root = "http://127.0.0.1:" + str(server.server_port)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            config = {"auth_type": "oauth", "client_id": "id", "client_secret": "secret", "token_url": root + "/token", "base_url": root + "/api1"}
+            report_url = root + "/api1/ccx/service/customreport2/t/owner/report?key=value"
+            self.assertEqual(list(stream_report(report_url, config)), [{"id": "1"}])
+            self.assertEqual(download_xsd(report_url, config), "<schema/>")
+            self.assertEqual(observed, [
+                ("/token", "Basic aWQ6c2VjcmV0"),
+                ("/api1/ccx/service/customreport2/t/owner/report?key=value&format=json", "Bearer opaque-1"),
+                ("/token", "Basic aWQ6c2VjcmV0"),
+                ("/api2/ccx/service/customreport2/t/owner/report?key=value&format=json", "Bearer opaque-2"),
+                ("/token", "Basic aWQ6c2VjcmV0"),
+                ("/api1/ccx/service/customreport2/t/owner/report?xsds", "Bearer opaque-3"),
+                ("/token", "Basic aWQ6c2VjcmV0"),
+                ("/ccx/service/customreport2/t/owner/report?xsds", "Bearer opaque-4"),
+            ])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
     def test_token_endpoint_precedence_expiry_refresh_and_omission(self):
         http = mock.Mock()
         bodies = [

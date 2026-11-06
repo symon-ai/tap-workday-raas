@@ -63,6 +63,8 @@ are unchanged. This is separate from OAuth `token_url`. A token response's
 `instance_url`, or otherwise `service_url`, takes precedence for API requests.
 Refresh responses may update that endpoint; omission retains the last advertised
 endpoint. Basic auth also supports `base_url`.
+Configured or previously advertised prefixes in report URLs from the same API
+origin are replaced on refresh; report paths and query parameters are retained.
 
 Use an **API Client for Integrations** from Workday. Typical keys: `auth_type`: `"oauth"`, `client_id`, `client_secret`, `token_url` (`https://{your-host}/ccx/oauth2/{tenant}/token`), `oauth_grant_type` (`client_credentials` or `refresh_token`), optional `oauth_scope`, optional `refresh_token` for the refresh grant.
 

@@ -20,19 +20,31 @@ class WorkdayApiSession(requests.Session):
         super().__init__()
         self.base_url = base_url
         self.oauth_provider = None
+        self._routing_prefixes = set()
 
     def request(self, method, url, **kwargs):
         base_url = self.base_url
+        previous_base_url = None
         if self.oauth_provider is not None:
+            previous_base_url = self.oauth_provider.api_base_url
             self.headers["Authorization"] = "Bearer " + self.oauth_provider.get_access_token()
             base_url = self.oauth_provider.api_base_url or base_url
         if base_url:
             base = urlsplit(base_url)
             original = urlsplit(url)
-            prefix = base.path.rstrip("/")
-            path = original.path
-            if prefix and not (path == prefix or path.startswith(prefix + "/")):
-                path = prefix + "/" + path.lstrip("/")
+            for known_url in (self.base_url, previous_base_url, base_url):
+                if known_url:
+                    known = urlsplit(known_url)
+                    self._routing_prefixes.add((known.scheme, known.netloc.lower(), known.path.rstrip("/")))
+            # WSDL addresses and report URLs may still carry a previous API prefix.
+            old_prefix = max(
+                (prefix for scheme, origin, prefix in self._routing_prefixes
+                 if scheme == original.scheme and origin == original.netloc.lower()
+                 and prefix and (original.path == prefix or original.path.startswith(prefix + "/"))),
+                key=len, default="",
+            )
+            path = original.path[len(old_prefix):]
+            path = base.path.rstrip("/") + "/" + path.lstrip("/")
             url = urlunsplit((base.scheme, base.netloc, path, original.query, original.fragment))
         return super().request(method, url, **kwargs)
 
