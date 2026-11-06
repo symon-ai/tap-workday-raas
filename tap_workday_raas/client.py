@@ -4,6 +4,7 @@ import ijson as ijson_core
 from tap_workday_raas.symon_exception import SymonException
 from tap_workday_raas.oauth_middleware import (
     WorkdayOAuthError,
+    WorkdayApiSession,
     WorkdayOAuthTokenProvider,
     raas_config_uses_oauth,
     workday_oauth_error_details,
@@ -14,7 +15,7 @@ def _session_for_config(config):
     """Build a requests.Session with basic auth or OAuth Bearer, and optional OAuth provider for retry."""
     disable_ssl = config.get("disable_ssl_verification", False)
     verify = not disable_ssl
-    session = requests.Session()
+    session = WorkdayApiSession(config.get("base_url"))
     if disable_ssl:
         session.verify = False
     if raas_config_uses_oauth(config):

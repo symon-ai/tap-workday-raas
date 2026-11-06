@@ -9,8 +9,33 @@ import re
 import threading
 import time
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
+
+class WorkdayApiSession(requests.Session):
+    """Route API traffic without changing token exchange URLs or service paths."""
+
+    def __init__(self, base_url=None):
+        super().__init__()
+        self.base_url = base_url
+        self.oauth_provider = None
+
+    def request(self, method, url, **kwargs):
+        base_url = self.base_url
+        if self.oauth_provider is not None:
+            self.headers["Authorization"] = "Bearer " + self.oauth_provider.get_access_token()
+            base_url = self.oauth_provider.api_base_url or base_url
+        if base_url:
+            base = urlsplit(base_url)
+            original = urlsplit(url)
+            prefix = base.path.rstrip("/")
+            path = original.path
+            if prefix and not (path == prefix or path.startswith(prefix + "/")):
+                path = prefix + "/" + path.lstrip("/")
+            url = urlunsplit((base.scheme, base.netloc, path, original.query, original.fragment))
+        return super().request(method, url, **kwargs)
+
 
 
 class WorkdayOAuthError(Exception):
@@ -268,6 +293,7 @@ class WorkdayOAuthTokenProvider:
         self._access_token: Optional[str] = None
         self._expires_at: float = 0.0
         self._session_ref: Optional[requests.Session] = None
+        self.api_base_url: Optional[str] = None
         self._access_token_refresh_leeway_seconds = int(access_token_refresh_leeway_seconds)
         self._access_token_min_cache_seconds = int(access_token_min_cache_seconds)
 
@@ -292,6 +318,8 @@ class WorkdayOAuthTokenProvider:
 
     def apply_to_session(self, session: requests.Session) -> None:
         self._session_ref = session
+        if isinstance(session, WorkdayApiSession):
+            session.oauth_provider = self
         session.headers["Authorization"] = "Bearer " + self.get_access_token()
 
     def get_access_token(self) -> str:
@@ -400,6 +428,7 @@ class WorkdayOAuthTokenProvider:
         access = body.get("access_token")
         if not access:
             raise WorkdayOAuthError(f"Token response missing access_token: {body}")
+        self.api_base_url = body.get("instance_url") or body.get("service_url") or self.api_base_url
         self._access_token = access
         if winning_client_id is not None:
             self._token_client_id_for_auth = winning_client_id

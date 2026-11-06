@@ -57,6 +57,13 @@ poetry run tap-workday-raas <options>
 
 ### OAuth (alternative to username / password)
 
+Optional `base_url` sets the API origin (or root prefix), retaining each report's
+path and query parameters for report and XSD requests. Without it, report URLs
+are unchanged. This is separate from OAuth `token_url`. A token response's
+`instance_url`, or otherwise `service_url`, takes precedence for API requests.
+Refresh responses may update that endpoint; omission retains the last advertised
+endpoint. Basic auth also supports `base_url`.
+
 Use an **API Client for Integrations** from Workday. Typical keys: `auth_type`: `"oauth"`, `client_id`, `client_secret`, `token_url` (`https://{your-host}/ccx/oauth2/{tenant}/token`), `oauth_grant_type` (`client_credentials` or `refresh_token`), optional `oauth_scope`, optional `refresh_token` for the refresh grant.
 
 **Grant type must match the Workday client.** If the client uses **Authorization Code** (you have a **refresh token**), set **`oauth_grant_type` to `refresh_token`** and supply **`refresh_token`**. Do **not** pair `client_credentials` with a refresh token in config—Workday often returns HTTP 400. Use **`client_credentials`** only for clients registered for that grant with **no** `refresh_token` in config.
