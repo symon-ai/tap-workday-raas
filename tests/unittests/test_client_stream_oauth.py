@@ -188,5 +188,47 @@ class TestStreamReportOAuth(unittest.TestCase):
         self.assertEqual(provider.get_access_token.call_count, 1)
 
 
+class _ErrorResponse:
+    def __init__(self, status_code, text, headers=None):
+        self.status_code = status_code
+        self.text = text
+        self.headers = headers or {}
+
+    def raise_for_status(self):
+        import requests
+        raise requests.exceptions.HTTPError(
+            "{} Server Error: Internal Server Error for url: https://example/report".format(self.status_code),
+            response=self,
+        )
+
+    def close(self):
+        return None
+
+
+class TestStreamReportHttpErrors(unittest.TestCase):
+    def _stream_with_response(self, response):
+        session = mock.Mock()
+        session.get.return_value = _GetContext(response)
+        with mock.patch.object(_client_mod, "_session_for_config", return_value=(session, None)):
+            return list(stream_report("https://example/report", {"username": "u", "password": "p"}))
+
+    def test_500_with_body_passes_workday_error_through(self):
+        body = '{"error": "Prompt Start Date is required"}'
+        with self.assertRaises(SymonException) as ctx:
+            self._stream_with_response(_ErrorResponse(500, body))
+        self.assertEqual(ctx.exception.code, "workday.WorkdayApiError")
+        self.assertEqual(str(ctx.exception), "Import failed with the following WorkdayRaaS error: " + body)
+
+    def test_500_with_empty_body_passes_http_error_through(self):
+        with self.assertRaises(SymonException) as ctx:
+            self._stream_with_response(_ErrorResponse(500, ""))
+        self.assertEqual(ctx.exception.code, "workday.WorkdayApiError")
+        self.assertEqual(
+            str(ctx.exception),
+            "Import failed with the following WorkdayRaaS error: "
+            "500 Server Error: Internal Server Error for url: https://example/report",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -111,6 +111,14 @@ WORKDAY_OAUTH_TOKEN_REQUEST_FAILED_MESSAGE = (
 )
 
 
+def _workday_http_error(e):
+    body = e.response.text.strip() if e.response is not None and e.response.text else ""
+    return SymonException(
+        "Import failed with the following WorkdayRaaS error: {}".format(body or str(e)),
+        "workday.WorkdayApiError",
+    )
+
+
 def _wrap_oauth_error(exc):
     return SymonException(
         WORKDAY_OAUTH_TOKEN_REQUEST_FAILED_MESSAGE,
@@ -176,12 +184,7 @@ def stream_report(report_url, config):
                 "The username or password provided is incorrect. Please check and try again",
                 "workday.InvalidUsernameOrPassword",
             )
-        if e.response is not None and e.response.text:
-            raise SymonException(
-                "Import failed with the following WorkdayRaaS error: {}".format(e.response.text),
-                "workday.WorkdayApiError",
-            )
-        raise
+        raise _workday_http_error(e) from e
     except requests.exceptions.ConnectionError as e:
         message = str(e)
         display_url = corrected_url if (config.get("api_base_url") or "").strip() else report_url
@@ -267,12 +270,7 @@ def download_xsd(report_url, config, session=None, oauth_provider=None):
         if '500 Server Error: Internal Server Error for url' in str(e):
             raise SymonException("Sorry, we couldn't access your report. Verify your report URL and name, and ensure your Workday account permissions and security settings allow access. If the issue persists, contact your Workday administrator.",
                                  'workdayRaaS.WorkdayRaaSInvalidReportURL')
-        if e.response is not None and e.response.text:
-            raise SymonException(
-                "Import failed with the following WorkdayRaaS error: {}".format(e.response.text),
-                "workday.WorkdayApiError",
-            )
-        raise
+        raise _workday_http_error(e) from e
     except requests.exceptions.ConnectionError as e:
         message = str(e)
         display_url = xsds_url if (config.get("api_base_url") or "").strip() else report_url
