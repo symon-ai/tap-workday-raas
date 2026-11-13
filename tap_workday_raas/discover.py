@@ -26,11 +26,16 @@ def _element_to_schema(element):
 
     if elem_type in ("date", "dateTime"):
         schema = {"type": ["string"], "format": "date-time"}
-    elif elem_type == "decimal":
+    elif elem_type in ("decimal", "double", "float"):
         # TODO Update to the singer.decimal format when that is available
         schema = {"type": ["number"], }
+    elif elem_type in ("integer", "int", "long", "short"):
+        schema = {"type": ["integer"]}
+    elif elem_type == "boolean":
+        schema = {"type": ["boolean"]}
     else:
-        schema = {"type": [elem_type]}
+        # Workday-specific types such as wd:RichText are text
+        schema = {"type": ["string"]}
 
     if is_nullable:
         schema["type"].append("null")
