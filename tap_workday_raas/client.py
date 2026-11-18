@@ -111,12 +111,12 @@ WORKDAY_OAUTH_TOKEN_REQUEST_FAILED_MESSAGE = (
 )
 
 
-def _workday_http_error(e):
-    body = e.response.text.strip() if e.response is not None and e.response.text else ""
-    return SymonException(
-        "Import failed with the following WorkdayRaaS error: {}".format(body or str(e)),
-        "workday.WorkdayApiError",
-    )
+def _raise_for_status_with_body(resp):
+    # Streamed responses are closed when the `with` block exits, so the error body
+    # must be read before raising or it is unavailable in the except handler.
+    if resp.status_code >= 400:
+        resp.content
+    resp.raise_for_status()
 
 
 def _wrap_oauth_error(exc):
@@ -164,10 +164,10 @@ def stream_report(report_url, config):
                 oauth_provider.force_refresh()
                 resp.close()
                 with session.get(corrected_url, stream=True) as resp2:
-                    resp2.raise_for_status()
+                    _raise_for_status_with_body(resp2)
                     yield from _iter_report_json(resp2)
             else:
-                resp.raise_for_status()
+                _raise_for_status_with_body(resp)
                 yield from _iter_report_json(resp)
     except WorkdayOAuthError as e:
         raise _wrap_oauth_error(e)
@@ -184,7 +184,12 @@ def stream_report(report_url, config):
                 "The username or password provided is incorrect. Please check and try again",
                 "workday.InvalidUsernameOrPassword",
             )
-        raise _workday_http_error(e) from e
+        if e.response is not None and e.response.text:
+            raise SymonException(
+                "Import failed with the following WorkdayRaaS error: {}".format(e.response.text),
+                "workday.WorkdayApiError",
+            )
+        raise
     except requests.exceptions.ConnectionError as e:
         message = str(e)
         display_url = corrected_url if (config.get("api_base_url") or "").strip() else report_url
@@ -270,7 +275,12 @@ def download_xsd(report_url, config, session=None, oauth_provider=None):
         if '500 Server Error: Internal Server Error for url' in str(e):
             raise SymonException("Sorry, we couldn't access your report. Verify your report URL and name, and ensure your Workday account permissions and security settings allow access. If the issue persists, contact your Workday administrator.",
                                  'workdayRaaS.WorkdayRaaSInvalidReportURL')
-        raise _workday_http_error(e) from e
+        if e.response is not None and e.response.text:
+            raise SymonException(
+                "Import failed with the following WorkdayRaaS error: {}".format(e.response.text),
+                "workday.WorkdayApiError",
+            )
+        raise
     except requests.exceptions.ConnectionError as e:
         message = str(e)
         display_url = xsds_url if (config.get("api_base_url") or "").strip() else report_url
