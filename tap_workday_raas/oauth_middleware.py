@@ -9,9 +9,49 @@ import re
 import threading
 import time
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
+
+
+class WorkdayApiSession(requests.Session):
+    """Route report requests independently of the OAuth exchange endpoint."""
+
+    def __init__(self, base_url=None):
+        super().__init__()
+        self.base_url = self.validate_base_url(base_url)
+        self.oauth_provider = None
+
+    @staticmethod
+    def validate_base_url(value):
+        if value is None or not str(value).strip():
+            return None
+        value = str(value).strip()
+        parts = urlsplit(value)
+        if (
+            parts.scheme != "https" or not parts.hostname or parts.username is not None
+            or parts.password is not None or parts.query or parts.fragment
+        ):
+            raise ValueError("Workday base_url must be an HTTPS URL without credentials, query or fragment")
+        return value.rstrip("/")
+
+    def request(self, method, url, **kwargs):
+        provider = self.oauth_provider
+        if provider is not None:
+            self.headers["Authorization"] = "Bearer " + provider.get_access_token()
+        base_url = (provider.api_base_url if provider is not None else None) or self.base_url
+        if base_url:
+            source = urlsplit(url)
+            base = urlsplit(base_url)
+            path = source.path
+            if "/ccx/" in path:
+                path = path[path.index("/ccx/"):]
+            url = urlunsplit((
+                base.scheme, base.netloc, base.path.rstrip("/") + "/" + path.lstrip("/"),
+                source.query, source.fragment,
+            ))
+        return super().request(method, url, **kwargs)
 
 class WorkdayOAuthError(Exception):
     """Token endpoint returned an error."""
@@ -269,6 +309,7 @@ class WorkdayOAuthTokenProvider:
         self._expires_at: float = 0.0
         self._session_ref: Optional[requests.Session] = None
         self._access_token_refresh_leeway_seconds = int(access_token_refresh_leeway_seconds)
+        self.api_base_url: Optional[str] = None
         self._access_token_min_cache_seconds = int(access_token_min_cache_seconds)
 
     @classmethod
@@ -293,6 +334,8 @@ class WorkdayOAuthTokenProvider:
     def apply_to_session(self, session: requests.Session) -> None:
         self._session_ref = session
         session.headers["Authorization"] = "Bearer " + self.get_access_token()
+        if isinstance(session, WorkdayApiSession):
+            session.oauth_provider = self
 
     def get_access_token(self) -> str:
         with self._lock:
@@ -400,6 +443,10 @@ class WorkdayOAuthTokenProvider:
         access = body.get("access_token")
         if not access:
             raise WorkdayOAuthError(f"Token response missing access_token: {body}")
+        self.api_base_url = (
+            WorkdayApiSession.validate_base_url(body.get("instance_url"))
+            or WorkdayApiSession.validate_base_url(body.get("service_url"))
+        )
         self._access_token = access
         if winning_client_id is not None:
             self._token_client_id_for_auth = winning_client_id

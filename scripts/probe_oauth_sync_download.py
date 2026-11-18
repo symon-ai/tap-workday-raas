@@ -31,6 +31,7 @@ if str(_ROOT) not in sys.path:
 import tap_workday_raas.client as client_mod  # noqa: E402
 from tap_workday_raas.client import stream_report  # noqa: E402
 from tap_workday_raas.oauth_middleware import (  # noqa: E402
+    WorkdayApiSession,
     WorkdayOAuthError,
     WorkdayOAuthTokenProvider,
     raas_config_uses_oauth,
@@ -99,7 +100,7 @@ def _install_http_counters(metrics: _HttpMetrics, *, reuse_provider: bool) -> No
 
         disable_ssl = config.get("disable_ssl_verification", False)
         verify = not disable_ssl
-        session = requests.Session()
+        session = WorkdayApiSession(config.get("base_url"))
         if disable_ssl:
             session.verify = False
         if raas_config_uses_oauth(config):

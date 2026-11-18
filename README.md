@@ -55,6 +55,12 @@ poetry run tap-workday-raas <options>
    }
    ```
 
+### base_url (optional)
+
+Set `"base_url": "https://gateway.example.com/workday"` to route report downloads and schema requests through a customer endpoint. Its complete path prefix is placed before the report's `/ccx/...` path (or the full report path when it has no `/ccx/` segment). Report query parameters remain intact, except for the existing JSON/schema format selection. Omit or leave blank to use each original `report_url`.
+
+For OAuth, the latest token response's `instance_url` (preferred) or `service_url` overrides `base_url`, including after refresh. These are HTTPS base URLs; `token_url` remains the independent OAuth exchange URL. Use trusted endpoints with normal TLS certificate validation; no local JWT validation, certificate pinning or TLS bypass is required.
+
 ### OAuth (alternative to username / password)
 
 Use an **API Client for Integrations** from Workday. Typical keys: `auth_type`: `"oauth"`, `client_id`, `client_secret`, `token_url` (`https://{your-host}/ccx/oauth2/{tenant}/token`), `oauth_grant_type` (`client_credentials` or `refresh_token`), optional `oauth_scope`, optional `refresh_token` for the refresh grant.
