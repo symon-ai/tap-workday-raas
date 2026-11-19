@@ -10,8 +10,6 @@ from tap_workday_raas.symon_exception import SymonException
 
 LOGGER = singer.get_logger()
 
-PARENT_KEY_PREFIX = "parent_"
-
 
 def _element_to_schema(element):
     elem_type = element.attrib["type"].split(":")[1]
@@ -63,7 +61,7 @@ def parse_complex_type(complex_type_selectors, xsd_schema_et, ns):
     return complex_type_mapping
 
 
-def generate_schema_for_report(xsd, key_properties=None):
+def generate_schema_for_report(xsd):
     xsd_schema_et = ElementTree.fromstring(xsd)
     ns = {"xsd": "http://www.w3.org/2001/XMLSchema"}
 
@@ -106,34 +104,7 @@ def generate_schema_for_report(xsd, key_properties=None):
             schema_type = _element_to_schema(elem)
 
             schema["properties"][elem_name] = {**schema_type}
-
-    add_parent_key_properties(schema, key_properties)
     return schema
-
-
-def _is_group(property_schema):
-    return property_schema.get("type") == "array" and "properties" in property_schema.get("items", {})
-
-
-def parent_key_field_name(parent_key):
-    return PARENT_KEY_PREFIX + parent_key
-
-
-def add_parent_key_properties(schema, key_properties=None):
-    """Add the parent row's key to each group item so nested tables can be joined back to the report."""
-    properties = schema["properties"]
-    parent_keys = key_properties or [
-        name for name, prop in properties.items() if not _is_group(prop) and prop.get("type") != "object"
-    ][:1]
-    parent_keys = [key for key in parent_keys if key in properties and not _is_group(properties[key])]
-
-    for name, prop in properties.items():
-        if not _is_group(prop):
-            continue
-        items = {**prop["items"], "properties": dict(prop["items"]["properties"])}
-        for parent_key in parent_keys:
-            items["properties"].setdefault(parent_key_field_name(parent_key), dict(properties[parent_key]))
-        properties[name] = {**prop, "items": items}
 
 
 def discover_streams(config):
@@ -155,7 +126,7 @@ def discover_streams(config):
         xsd = download_xsd(
             report["report_url"], config, session=session, oauth_provider=oauth_provider
         )
-        schema = generate_schema_for_report(xsd, report.get("key_properties"))
+        schema = generate_schema_for_report(xsd)
 
         stream_md = metadata.get_standard_metadata(schema,
                                                    key_properties=report.get(

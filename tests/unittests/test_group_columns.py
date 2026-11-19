@@ -93,7 +93,6 @@ class GroupColumnSchemaTest(unittest.TestCase):
                 "DBS": {"type": ["string", "null"]},
                 "Bonus_Plan": {"type": ["string", "null"]},
                 "Target_Percent": {"type": ["number", "null"]},
-                "parent_Job_Code": {"type": ["string", "null"]},
             },
         )
 
@@ -171,60 +170,6 @@ class GroupColumnTransformTest(unittest.TestCase):
         self.assertEqual(result["Compensation_Eligibility_Rules_group"][0]["Bonus_Plan"], "Commercial Bonus")
 
 
-class ParentKeyTest(unittest.TestCase):
-    def _items(self, schema, group="Compensation_Eligibility_Rules_group"):
-        return schema["properties"][group]["items"]["properties"]
-
-    def test_first_column_is_parent_key_by_default(self):
-        self.assertIn("parent_Job_Code", self._items(_schema()))
-
-    def test_key_properties_override_first_column(self):
-        schema = discover.generate_schema_for_report(xsd, ["Job_Profile"])
-
-        self.assertIn("parent_Job_Profile", self._items(schema))
-        self.assertNotIn("parent_Job_Code", self._items(schema))
-
-    def test_every_group_gets_parent_key(self):
-        two_group_xsd = xsd.replace(
-            '<xsd:element name="Compensation_Eligibility_Rules_group" type="wd:Compensation_Eligibility_Rules_groupType" minOccurs="0" maxOccurs="unbounded"/>',
-            '<xsd:element name="Compensation_Eligibility_Rules_group" type="wd:Compensation_Eligibility_Rules_groupType" minOccurs="0" maxOccurs="unbounded"/>'
-            '<xsd:element name="Other_Rules_group" type="wd:Compensation_Eligibility_Rules_groupType" minOccurs="0" maxOccurs="unbounded"/>',
-        )
-        schema = discover.generate_schema_for_report(two_group_xsd)
-        record = sync.add_parent_keys(
-            {"Job_Code": "JC1", "Compensation_Eligibility_Rules_group": [{"DBS": "Y"}], "Other_Rules_group": [{"DBS": "N"}]},
-            sync._parent_key_fields(schema),
-        )
-
-        self.assertEqual(record["Compensation_Eligibility_Rules_group"], [{"DBS": "Y", "parent_Job_Code": "JC1"}])
-        self.assertEqual(record["Other_Rules_group"], [{"DBS": "N", "parent_Job_Code": "JC1"}])
-
-    def test_group_returned_as_object_gets_parent_key(self):
-        record = sync.add_parent_keys(
-            {"Job_Code": "JC1", "Compensation_Eligibility_Rules_group": {"DBS": "Y"}},
-            sync._parent_key_fields(_schema()),
-        )
-
-        self.assertEqual(record["Compensation_Eligibility_Rules_group"], {"DBS": "Y", "parent_Job_Code": "JC1"})
-
-    def test_catalog_without_parent_keys_is_unchanged(self):
-        schema = _schema()
-        del self._items(schema)["parent_Job_Code"]
-        record = {"Job_Code": "JC1", "Compensation_Eligibility_Rules_group": [{"DBS": "Y"}]}
-
-        sync.add_parent_keys(record, sync._parent_key_fields(schema))
-
-        self.assertEqual(record["Compensation_Eligibility_Rules_group"], [{"DBS": "Y"}])
-
-    def test_existing_sub_field_with_same_name_is_not_overwritten(self):
-        record = sync.add_parent_keys(
-            {"Job_Code": "JC1", "Compensation_Eligibility_Rules_group": [{"parent_Job_Code": "FROM_WORKDAY"}]},
-            sync._parent_key_fields(_schema()),
-        )
-
-        self.assertEqual(record["Compensation_Eligibility_Rules_group"], [{"parent_Job_Code": "FROM_WORKDAY"}])
-
-
 class XsdTypeMappingTest(unittest.TestCase):
     def _element_schema(self, xsd_type):
         element = discover.ElementTree.fromstring(
@@ -270,8 +215,8 @@ class GroupColumnSyncTest(unittest.TestCase):
         self.assertEqual(
             records[0]["Compensation_Eligibility_Rules_group"],
             [
-                {"DBS": "Y", "Bonus_Plan": "Commercial Bonus", "Target_Percent": 15, "parent_Job_Code": "JC100"},
-                {"DBS": "N", "Bonus_Plan": "Spot Bonus", "Target_Percent": 5.5, "parent_Job_Code": "JC100"},
+                {"DBS": "Y", "Bonus_Plan": "Commercial Bonus", "Target_Percent": 15},
+                {"DBS": "N", "Bonus_Plan": "Spot Bonus", "Target_Percent": 5.5},
             ],
         )
         self.assertNotIn("Compensation_Eligibility_Rules_group", records[1])

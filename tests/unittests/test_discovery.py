@@ -48,8 +48,7 @@ class DiscoveryTest(unittest.TestCase):
                      'Candidate_Details_group': {'items':
                                                  {'properties': {'Employee': {'type': ['string', 'null']},
                                                                  'Potential': {'type': ['string', 'null']},
-                                                                 'Willing_To_Travel': {'type': ['string', 'null']},
-                                                                 'parent_Default_Job_Title': {'type': ['string', 'null']}},
+                                                                 'Willing_To_Travel': {'type': ['string', 'null']}},
                                                   'type': 'object'},
                                                  'type': 'array'},
                      'Default_Assessment_Tests': {'type': ['string', 'null']},
