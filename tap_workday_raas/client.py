@@ -7,6 +7,7 @@ from tap_workday_raas.oauth_middleware import (
     WorkdayOAuthTokenProvider,
     raas_config_uses_oauth,
     workday_oauth_error_details,
+    configure_workday_api_session,
 )
 
 
@@ -15,6 +16,7 @@ def _session_for_config(config):
     disable_ssl = config.get("disable_ssl_verification", False)
     verify = not disable_ssl
     session = requests.Session()
+    configure_workday_api_session(session, config.get("base_url"))
     if disable_ssl:
         session.verify = False
     if raas_config_uses_oauth(config):
