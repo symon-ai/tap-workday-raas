@@ -12,6 +12,8 @@ from typing import Any, Dict, Optional, Tuple
 
 import requests
 
+from .oauth_routing import configured_base_url, oauth_session, reject_redirect, response_route, token_endpoint
+
 
 class WorkdayOAuthError(Exception):
     """Token endpoint returned an error."""
@@ -106,7 +108,8 @@ def raas_config_uses_oauth(config: Dict[str, Any]) -> bool:
         return True
     if explicit == "basic":
         return False
-    has_oauth = bool(config.get("client_id") and config.get("client_secret") and config.get("token_url"))
+    has_oauth = bool(config.get("client_id") and config.get("client_secret")
+                     and (config.get("token_url") or config.get("base_url")))
     has_basic = bool(config.get("username") and config.get("password"))
     if has_oauth and not has_basic:
         return True
@@ -117,7 +120,7 @@ def raas_config_uses_oauth(config: Dict[str, Any]) -> bool:
             "Specify auth_type 'oauth' or 'basic' when both username/password and OAuth fields are present."
         )
     raise ValueError(
-        "Authentication required: username/password (basic) or client_id, client_secret, token_url (oauth)."
+        "Authentication required: username/password (basic) or OAuth client credentials and token endpoint."
     )
 
 
@@ -139,7 +142,7 @@ def _config_str(config: Dict[str, Any], key: str, default: str = "") -> str:
 
 def _parse_oauth_config(config: Dict[str, Any]) -> Dict[str, Any]:
     """Validate OAuth settings and return normalized values for the token provider."""
-    for key in ("client_id", "client_secret", "token_url"):
+    for key in ("client_id", "client_secret"):
         if not config.get(key):
             raise ValueError(f"OAuth auth requires {key} in config")
 
@@ -166,6 +169,8 @@ def _parse_oauth_config(config: Dict[str, Any]) -> Dict[str, Any]:
     leeway, min_cache = _oauth_access_token_cache_settings(config)
     return {
         "grant_type": grant_type,
+        "token_url": token_endpoint(config),
+        "base_url": configured_base_url(config),
         "token_client_auth": token_client_auth,
         "client_id_format": client_id_format,
         "leeway": leeway,
@@ -207,7 +212,7 @@ def _seed_access_token_from_config(
             )
     else:
         expires_in = 3600
-    token = str(access).strip()
+    token = str(access)
     ttl = _oauth_access_token_cache_ttl_seconds(expires_in, leeway, min_cache)
     # Currently only called from from_config (pre-apply, single-threaded construction), but the
     # update is wrapped to stay safe if this is ever invoked after apply_to_session has linked
@@ -217,6 +222,7 @@ def _seed_access_token_from_config(
     #   - mirror _save_access_token by syncing the linked session's Authorization header so
     #     callers do not authenticate with a stale Bearer until the next cache-TTL refresh.
     with provider._lock:
+        provider._service_url = response_route(config)
         provider._access_token = token
         provider._expires_at = time.time() + float(ttl)
         if provider._session_ref is not None:
@@ -256,6 +262,8 @@ class WorkdayOAuthTokenProvider:
         self._client_id = _token_client_id(self._client_id_raw, client_id_format)
         self._client_secret = client_secret
         self._token_url = token_url
+        self._base_url: Optional[str] = None
+        self._service_url: Optional[str] = None
         self._grant_type = grant_type.strip().lower()
         self._refresh_token = refresh_token
         self._scope = scope
@@ -263,7 +271,7 @@ class WorkdayOAuthTokenProvider:
         self._token_client_auth = token_client_auth.strip().lower()
         self._client_id_format = (client_id_format or "auto").strip().lower()
         self._token_client_id_for_auth: Optional[str] = None
-        self._http = session or requests.Session()
+        self._http = session or oauth_session()
         self._lock = threading.Lock()
         self._access_token: Optional[str] = None
         self._expires_at: float = 0.0
@@ -277,7 +285,7 @@ class WorkdayOAuthTokenProvider:
         provider = cls(
             client_id=config["client_id"],
             client_secret=config["client_secret"],
-            token_url=config["token_url"],
+            token_url=oauth["token_url"],
             grant_type=oauth["grant_type"],
             refresh_token=config.get("refresh_token"),
             scope=config.get("oauth_scope"),
@@ -287,6 +295,7 @@ class WorkdayOAuthTokenProvider:
             access_token_refresh_leeway_seconds=oauth["leeway"],
             access_token_min_cache_seconds=oauth["min_cache"],
         )
+        provider._base_url = oauth["base_url"]
         _seed_access_token_from_config(provider, config, oauth["leeway"], oauth["min_cache"])
         return provider
 
@@ -294,14 +303,16 @@ class WorkdayOAuthTokenProvider:
         self._session_ref = session
         session.headers["Authorization"] = "Bearer " + self.get_access_token()
 
-    def get_access_token(self) -> str:
+    def request_context(self) -> Tuple[str, Optional[str]]:
+        """Read the cached token and its route together, refreshing if necessary."""
         with self._lock:
-            now = time.time()
-            if self._access_token and now < self._expires_at:
-                return self._access_token
-            self._fetch_token_locked()
+            if not self._access_token or time.time() >= self._expires_at:
+                self._fetch_token_locked()
             assert self._access_token is not None
-            return self._access_token
+            return self._access_token, self._service_url or self._base_url
+
+    def get_access_token(self) -> str:
+        return self.request_context()[0]
 
     def force_refresh(self) -> str:
         with self._lock:
@@ -319,13 +330,19 @@ class WorkdayOAuthTokenProvider:
             post_data["client_secret"] = self._client_secret
         else:
             headers["Authorization"] = _basic_auth_header(client_id_for_auth, self._client_secret)
-        return self._http.post(
+        response = self._http.post(
             self._token_url,
             data=post_data,
             headers=headers,
             verify=self._verify,
             timeout=120,
+            allow_redirects=False,
         )
+        try:
+            reject_redirect(response)
+        except requests.exceptions.HTTPError as exc:
+            raise WorkdayOAuthError(str(exc), status_code=response.status_code) from exc
+        return response
 
     def _token_request_body(self) -> Dict[str, str]:
         data: Dict[str, str] = {"grant_type": self._grant_type}
@@ -369,10 +386,14 @@ class WorkdayOAuthTokenProvider:
         return resp, None
 
     def _raise_token_endpoint_error(self, resp: requests.Response) -> None:
-        body_snip = (resp.text or "").strip()
+        code = _oauth_token_error_code(resp.text)
+        error_body = json.dumps({"error": code}) if code in {
+            "invalid_request", "invalid_client", "invalid_grant", "unauthorized_client",
+            "unsupported_grant_type", "invalid_scope", "server_error", "temporarily_unavailable",
+        } else None
         msg = f"Token endpoint error: HTTP {resp.status_code}"
-        if body_snip:
-            msg = f"{msg} — {body_snip[:1000]}"
+        if error_body:
+            msg = f"{msg} — {error_body}"
         if self._grant_type == "refresh_token" and _oauth_refresh_token_rejected(
             resp.status_code, resp.text
         ):
@@ -384,31 +405,36 @@ class WorkdayOAuthTokenProvider:
             raise WorkdayRefreshTokenInvalidError(
                 msg,
                 status_code=resp.status_code,
-                response_body=resp.text,
+                response_body=error_body,
             )
         raise WorkdayOAuthError(
             msg,
             status_code=resp.status_code,
-            response_body=resp.text,
+            response_body=error_body,
         )
 
     def _save_access_token(self, resp: requests.Response, winning_client_id: Optional[str]) -> None:
         try:
             body = resp.json()
-        except json.JSONDecodeError as e:
-            raise WorkdayOAuthError(f"Token response was not JSON: {resp.text[:500]}") from e
-        access = body.get("access_token")
-        if not access:
-            raise WorkdayOAuthError(f"Token response missing access_token: {body}")
-        self._access_token = access
-        if winning_client_id is not None:
-            self._token_client_id_for_auth = winning_client_id
+        except json.JSONDecodeError:
+            raise WorkdayOAuthError("Token response was not JSON") from None
+        access = body.get("access_token") if isinstance(body, dict) else None
+        if not isinstance(access, str) or not access:
+            raise WorkdayOAuthError("Token response missing access_token")
+        try:
+            route = response_route(body)
+        except ValueError as exc:
+            raise WorkdayOAuthError(str(exc)) from exc
         expires_in = int(body.get("expires_in", 3600))
         ttl = _oauth_access_token_cache_ttl_seconds(
             expires_in,
             self._access_token_refresh_leeway_seconds,
             self._access_token_min_cache_seconds,
         )
+        self._access_token = access
+        self._service_url = route
+        if winning_client_id is not None:
+            self._token_client_id_for_auth = winning_client_id
         self._expires_at = time.time() + float(ttl)
         if self._session_ref is not None:
             self._session_ref.headers["Authorization"] = "Bearer " + self._access_token

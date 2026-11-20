@@ -1,34 +1,12 @@
 """Prove stream_report holds one report GET for the full response stream (OAuth)."""
 
-import importlib.util
-import sys
-import types
 import unittest
-from pathlib import Path
 from unittest import mock
 
-_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _load_module(name: str, path: Path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-# Minimal package namespace so client.py imports do not load tap __init__ / discover.
-sys.modules.setdefault("tap_workday_raas", types.ModuleType("tap_workday_raas"))
-_load_module("tap_workday_raas.symon_exception", _ROOT / "tap_workday_raas" / "symon_exception.py")
-_oauth_mod = _load_module("tap_workday_raas.oauth_middleware", _ROOT / "tap_workday_raas" / "oauth_middleware.py")
-_client_mod = _load_module("tap_workday_raas.client", _ROOT / "tap_workday_raas" / "client.py")
-
-stream_report = _client_mod.stream_report
-_wrap_oauth_error = _client_mod._wrap_oauth_error
-WorkdayOAuthError = _oauth_mod.WorkdayOAuthError
-WorkdayRefreshTokenInvalidError = _oauth_mod.WorkdayRefreshTokenInvalidError
-SymonException = sys.modules["tap_workday_raas.symon_exception"].SymonException
+from tap_workday_raas import client as _client_mod
+from tap_workday_raas.client import stream_report, _wrap_oauth_error
+from tap_workday_raas.oauth_middleware import WorkdayOAuthError, WorkdayRefreshTokenInvalidError
+from tap_workday_raas.symon_exception import SymonException
 
 
 def _minimal_report_json_bytes():
@@ -52,12 +30,8 @@ class _StreamingReportResponse:
         return None
 
 
-class _GetContext:
-    def __init__(self, response):
-        self._response = response
-
     def __enter__(self):
-        return self._response
+        return self
 
     def __exit__(self, *args):
         return False
@@ -105,7 +79,7 @@ class TestStreamReportOAuth(unittest.TestCase):
 
         def counting_get(*_args, **_kwargs):
             report_get_count["n"] += 1
-            return _GetContext(_StreamingReportResponse(body))
+            return _StreamingReportResponse(body)
 
         session = mock.Mock()
         session.get.side_effect = counting_get
@@ -113,6 +87,7 @@ class TestStreamReportOAuth(unittest.TestCase):
 
         provider = mock.Mock()
         provider.get_access_token = mock.Mock(return_value="access-token-1")
+        provider.request_context.return_value = ("access-token-1", None)
         provider.force_refresh = mock.Mock()
         provider._expires_at = 0.0
 
@@ -153,11 +128,12 @@ class TestStreamReportOAuth(unittest.TestCase):
         ok = _StreamingReportResponse(body)
 
         session = mock.Mock()
-        session.get.side_effect = [_GetContext(unauthorized), _GetContext(ok)]
+        session.get.side_effect = [unauthorized, ok]
         session.headers = {}
 
         provider = mock.Mock()
         provider.get_access_token = mock.Mock(side_effect=["stale-token", "fresh-token"])
+        provider.request_context.side_effect = [("stale-token", None), ("fresh-token", None)]
         provider.force_refresh = mock.Mock()
 
         def apply_to_session(sess):

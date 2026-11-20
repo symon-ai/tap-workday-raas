@@ -59,6 +59,10 @@ poetry run tap-workday-raas <options>
 
 Use an **API Client for Integrations** from Workday. Typical keys: `auth_type`: `"oauth"`, `client_id`, `client_secret`, `token_url` (`https://{your-host}/ccx/oauth2/{tenant}/token`), `oauth_grant_type` (`client_credentials` or `refresh_token`), optional `oauth_scope`, optional `refresh_token` for the refresh grant.
 
+For a customer OAuth endpoint, set `base_url` to a public HTTPS origin (an optional trailing `/` is accepted). It replaces the origin of a configured `token_url` without changing the path or query. With no `token_url`, specify `tenant` so the tap can build `<base_url>/ccx/oauth2/<tenant>/token`.
+
+Report and schema requests use the origin from `service_url` (preferred) or `instance_url` in the token response, then `base_url`, then the configured report URL. The report path and normal JSON or XSD query handling are unchanged. A Singer config with an `access_token` can carry either route field until that token is refreshed. OAuth verifies TLS certificates and does not follow redirects.
+
 **Grant type must match the Workday client.** If the client uses **Authorization Code** (you have a **refresh token**), set **`oauth_grant_type` to `refresh_token`** and supply **`refresh_token`**. Do **not** pair `client_credentials` with a refresh token in config—Workday often returns HTTP 400. Use **`client_credentials`** only for clients registered for that grant with **no** `refresh_token` in config.
 
 **HTTP 401 `invalid_client`:** Wrong secret or wrong **client id** string for the token endpoint. Workday may expect the ID as shown (Base64) or the **decoded UUID**; with **`oauth_client_id_format`**: `auto` (default), the tap uses the resolved UUID first on **refresh_token** and retries with the raw value if Workday returns `invalid_client`. Use **`raw`** or **`uuid`** to force one encoding.

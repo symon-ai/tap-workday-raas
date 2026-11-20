@@ -8,21 +8,40 @@ from tap_workday_raas.oauth_middleware import (
     raas_config_uses_oauth,
     workday_oauth_error_details,
 )
+from .oauth_routing import oauth_session, reject_redirect, routed_url
 
 
 def _session_for_config(config):
     """Build a requests.Session with basic auth or OAuth Bearer, and optional OAuth provider for retry."""
-    disable_ssl = config.get("disable_ssl_verification", False)
-    verify = not disable_ssl
-    session = requests.Session()
-    if disable_ssl:
-        session.verify = False
     if raas_config_uses_oauth(config):
-        provider = WorkdayOAuthTokenProvider.from_config(config, verify=verify)
+        session = oauth_session()
+        provider = WorkdayOAuthTokenProvider.from_config(config)
         provider.apply_to_session(session)
         return session, provider
+    session = requests.Session()
+    if config.get("disable_ssl_verification", False):
+        session.verify = False
     session.auth = (config["username"], config["password"])
     return session, None
+
+
+def _get_report(session, provider, url, **kwargs):
+    if provider is None:
+        return session.get(url, **kwargs)
+    token, route = provider.request_context()
+    try:
+        url = routed_url(url, route)
+        response = session.get(
+            url, headers={"Authorization": "Bearer " + token},
+            verify=True, allow_redirects=False, **kwargs,
+        )
+    except ValueError as exc:
+        raise WorkdayOAuthError(str(exc)) from exc
+    try:
+        reject_redirect(response)
+    except requests.exceptions.HTTPError as exc:
+        raise WorkdayOAuthError(str(exc), status_code=response.status_code) from exc
+    return response
 
 
 WORKDAY_OAUTH_TOKEN_REQUEST_FAILED_MESSAGE = (
@@ -42,7 +61,7 @@ def stream_report(report_url, config):
     # Force the format query param to be set to format=json
 
     # Split query params off
-    url_breakdown = report_url.split("?")
+    url_breakdown = report_url.split("?", 1)
 
     # Gather all params that are not format
     if len(url_breakdown) == 1:
@@ -65,11 +84,11 @@ def stream_report(report_url, config):
         raise _wrap_oauth_error(e)
 
     try:
-        with session.get(corrected_url, stream=True) as resp:
+        with _get_report(session, oauth_provider, corrected_url, stream=True) as resp:
             if resp.status_code == 401 and oauth_provider is not None:
-                oauth_provider.force_refresh()
                 resp.close()
-                with session.get(corrected_url, stream=True) as resp2:
+                oauth_provider.force_refresh()
+                with _get_report(session, oauth_provider, corrected_url, stream=True) as resp2:
                     resp2.raise_for_status()
                     yield from _iter_report_json(resp2)
             else:
@@ -161,11 +180,12 @@ def download_xsd(report_url, config, session=None, oauth_provider=None):
             raise _wrap_oauth_error(e)
 
     def _fetch():
-        return session.get(xsds_url)
+        return _get_report(session, oauth_provider, xsds_url)
 
     try:
         response = _fetch()
         if response.status_code == 401 and oauth_provider is not None:
+            response.close()
             oauth_provider.force_refresh()
             response = _fetch()
         response.raise_for_status()
