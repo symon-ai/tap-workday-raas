@@ -111,6 +111,14 @@ WORKDAY_OAUTH_TOKEN_REQUEST_FAILED_MESSAGE = (
 )
 
 
+def _raise_for_status_with_body(resp):
+    # Streamed responses are closed when the `with` block exits, so the error body
+    # must be read before raising or it is unavailable in the except handler.
+    if resp.status_code >= 400:
+        resp.content
+    resp.raise_for_status()
+
+
 def _wrap_oauth_error(exc):
     return SymonException(
         WORKDAY_OAUTH_TOKEN_REQUEST_FAILED_MESSAGE,
@@ -156,10 +164,10 @@ def stream_report(report_url, config):
                 oauth_provider.force_refresh()
                 resp.close()
                 with session.get(corrected_url, stream=True) as resp2:
-                    resp2.raise_for_status()
+                    _raise_for_status_with_body(resp2)
                     yield from _iter_report_json(resp2)
             else:
-                resp.raise_for_status()
+                _raise_for_status_with_body(resp)
                 yield from _iter_report_json(resp)
     except WorkdayOAuthError as e:
         raise _wrap_oauth_error(e)
