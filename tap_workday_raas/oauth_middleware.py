@@ -306,7 +306,8 @@ class WorkdayOAuthTokenProvider:
     def request_context(self) -> Tuple[str, Optional[str]]:
         """Read the cached token and its route together, refreshing if necessary."""
         with self._lock:
-            if not self._access_token or time.time() >= self._expires_at:
+            now = time.time()
+            if not self._access_token or now >= self._expires_at:
                 self._fetch_token_locked()
             assert self._access_token is not None
             return self._access_token, self._service_url or self._base_url
