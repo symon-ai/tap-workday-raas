@@ -1,4 +1,5 @@
 import requests
+from tap_workday_raas.endpoints import configure_api_session
 import ijson.backends.yajl2_c as ijson
 import ijson as ijson_core
 from tap_workday_raas.symon_exception import SymonException
@@ -20,8 +21,10 @@ def _session_for_config(config):
     if raas_config_uses_oauth(config):
         provider = WorkdayOAuthTokenProvider.from_config(config, verify=verify)
         provider.apply_to_session(session)
+        configure_api_session(session, config, provider)
         return session, provider
     session.auth = (config["username"], config["password"])
+    configure_api_session(session, config)
     return session, None
 
 

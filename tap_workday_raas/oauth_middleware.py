@@ -11,6 +11,7 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 import requests
+from tap_workday_raas.endpoints import validate_base_url
 
 
 class WorkdayOAuthError(Exception):
@@ -268,6 +269,7 @@ class WorkdayOAuthTokenProvider:
         self._access_token: Optional[str] = None
         self._expires_at: float = 0.0
         self._session_ref: Optional[requests.Session] = None
+        self.api_base_url: Optional[str] = None
         self._access_token_refresh_leeway_seconds = int(access_token_refresh_leeway_seconds)
         self._access_token_min_cache_seconds = int(access_token_min_cache_seconds)
 
@@ -287,6 +289,8 @@ class WorkdayOAuthTokenProvider:
             access_token_refresh_leeway_seconds=oauth["leeway"],
             access_token_min_cache_seconds=oauth["min_cache"],
         )
+        if config.get("base_url"):
+            provider.api_base_url = validate_base_url(config["base_url"])
         _seed_access_token_from_config(provider, config, oauth["leeway"], oauth["min_cache"])
         return provider
 
@@ -400,6 +404,12 @@ class WorkdayOAuthTokenProvider:
         access = body.get("access_token")
         if not access:
             raise WorkdayOAuthError(f"Token response missing access_token: {body}")
+        endpoint = body.get("instance_url") or body.get("service_url")
+        if endpoint:
+            try:
+                self.api_base_url = validate_base_url(endpoint)
+            except ValueError as exc:
+                raise WorkdayOAuthError("Token response contains an invalid API base URL") from exc
         self._access_token = access
         if winning_client_id is not None:
             self._token_client_id_for_auth = winning_client_id
