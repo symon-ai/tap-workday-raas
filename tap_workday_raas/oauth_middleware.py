@@ -11,7 +11,7 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 import requests
-from tap_workday_raas.endpoints import validate_base_url
+from tap_workday_raas.endpoints import configure_token_session, validate_base_url
 
 
 class WorkdayOAuthError(Exception):
@@ -265,6 +265,7 @@ class WorkdayOAuthTokenProvider:
         self._client_id_format = (client_id_format or "auto").strip().lower()
         self._token_client_id_for_auth: Optional[str] = None
         self._http = session or requests.Session()
+        configure_token_session(self._http)
         self._lock = threading.Lock()
         self._access_token: Optional[str] = None
         self._expires_at: float = 0.0

@@ -61,6 +61,8 @@ Optional `base_url` (for example `https://workday.customer.example`) replaces th
 
 With OAuth, token response `instance_url` takes precedence over `service_url`, then `base_url`; absent response URLs retain the current API endpoint. This applies again after refresh. `token_url` always remains the configured token exchange endpoint, never the returned API endpoint. Custom/returned endpoints require public DNS addresses and TLS certificate verification, reject URL credentials/query/fragment, and do not follow redirects. Without these options, existing report URLs and basic authentication behavior are unchanged.
 
+OAuth token exchanges also require public HTTPS, certificate verification and no redirects, including refresh; `disable_ssl_verification` cannot disable these safeguards. Public addresses are checked at socket connection time without a second DNS lookup. OAuth token requests and custom/returned API endpoints cannot use an effective HTTP(S)/SOCKS proxy because proxy-side DNS cannot enforce this public-only boundary; they fail with an explicit proxy error. Legacy basic authentication without `base_url` keeps its existing proxy/TLS behavior.
+
 ### OAuth (alternative to username / password)
 
 Use an **API Client for Integrations** from Workday. Typical keys: `auth_type`: `"oauth"`, `client_id`, `client_secret`, `token_url` (`https://{your-host}/ccx/oauth2/{tenant}/token`), `oauth_grant_type` (`client_credentials` or `refresh_token`), optional `oauth_scope`, optional `refresh_token` for the refresh grant.
