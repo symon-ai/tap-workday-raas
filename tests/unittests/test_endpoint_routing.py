@@ -20,10 +20,22 @@ def _load_module(name, path):
     return module
 
 
-sys.modules.setdefault("tap_workday_raas", types.ModuleType("tap_workday_raas"))
-_load_module("tap_workday_raas.symon_exception", _ROOT / "tap_workday_raas" / "symon_exception.py")
-oauth = _load_module("tap_workday_raas.oauth_middleware", _ROOT / "tap_workday_raas" / "oauth_middleware.py")
-client = _load_module("tap_workday_raas.client", _ROOT / "tap_workday_raas" / "client.py")
+_MODULE_NAMES = (
+    "tap_workday_raas", "tap_workday_raas.symon_exception",
+    "tap_workday_raas.oauth_middleware", "tap_workday_raas.client",
+)
+_previous_modules = {name: sys.modules.get(name) for name in _MODULE_NAMES}
+try:
+    sys.modules.setdefault("tap_workday_raas", types.ModuleType("tap_workday_raas"))
+    _load_module("tap_workday_raas.symon_exception", _ROOT / "tap_workday_raas" / "symon_exception.py")
+    oauth = _load_module("tap_workday_raas.oauth_middleware", _ROOT / "tap_workday_raas" / "oauth_middleware.py")
+    client = _load_module("tap_workday_raas.client", _ROOT / "tap_workday_raas" / "client.py")
+finally:
+    for _name, _previous in _previous_modules.items():
+        if _previous is None:
+            sys.modules.pop(_name, None)
+        else:
+            sys.modules[_name] = _previous
 
 REPORT_PATH = "/ccx/service/customreport2/tenant/owner/Report_Name"
 REPORT = "https://vendor.workday.com" + REPORT_PATH + "?region=A%2FB&format=xml"
