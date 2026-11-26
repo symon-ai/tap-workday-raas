@@ -171,6 +171,23 @@ class TestEndpointRouting(unittest.TestCase):
                     "https://second.example/new-prefix" + REPORT_PATH + "?filter=A%2FB",
                 ])
 
+    def test_gateway_origin_ignores_hostname_case_and_default_port(self):
+        for endpoint in ("https://Gateway.example/Original", "https://Gateway.example:443/Original"):
+            with self.subTest(endpoint=endpoint):
+                seen = []
+                def send(adapter, request, **kwargs):
+                    seen.append(request.url)
+                    return response(request, b"ok")
+                session, provider = client._session_for_config(self.config(
+                    base_url=endpoint, service_url=endpoint, access_token="opaque-seeded"))
+                with mock.patch.object(requests.adapters.HTTPAdapter, "send", new=send):
+                    session.get("https://GATEWAY.example/Original" + REPORT_PATH + "?filter=A%2FB")
+                    session.get("https://gateway.example/original" + REPORT_PATH)
+                self.assertEqual(seen, [
+                    endpoint + REPORT_PATH + "?filter=A%2FB",
+                    endpoint + "/original" + REPORT_PATH,
+                ])
+
     def test_missing_endpoint_keeps_configured_or_previous_returned_route(self):
         provider = oauth.WorkdayOAuthTokenProvider.from_config(self.config(base_url="https://custom.example/prefix"))
         for payload, expected in [

@@ -41,7 +41,8 @@ class WorkdayRoutingSession(requests.Session):
             for origin in sorted(self._routing_origins, key=lambda url: len(urlsplit(url).path), reverse=True):
                 original = urlsplit(origin)
                 prefix = original.path.rstrip("/")
-                if source.netloc == original.netloc and prefix and (
+                same_origin = source.hostname == original.hostname and (source.port or 443) == (original.port or 443)
+                if same_origin and prefix and (
                     path == prefix or path.startswith(prefix + "/")
                 ):
                     path = path[len(prefix):]
