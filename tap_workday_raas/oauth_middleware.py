@@ -27,17 +27,18 @@ class WorkdayRoutingSession(requests.Session):
     def __init__(self, base_url=None):
         super().__init__()
         self.base_url = _https_url(base_url) if base_url else None
+        self._routing_origins = {self.base_url} if self.base_url else set()
         self.oauth_provider = None
 
     def send(self, request, **kwargs):
         endpoint = (self.oauth_provider.base_url if self.oauth_provider else None) or self.base_url
         if endpoint:
             base = urlsplit(endpoint)
+            self._routing_origins.add(endpoint)
             source = urlsplit(request.url)
             path = source.path
-            for origin in (endpoint, self.base_url):
-                if not origin:
-                    continue
+            # Retried prepared requests may still use an earlier gateway.
+            for origin in sorted(self._routing_origins, key=lambda url: len(urlsplit(url).path), reverse=True):
                 original = urlsplit(origin)
                 prefix = original.path.rstrip("/")
                 if source.netloc == original.netloc and prefix and (
@@ -330,7 +331,8 @@ class WorkdayOAuthTokenProvider:
             access_token_refresh_leeway_seconds=oauth["leeway"],
             access_token_min_cache_seconds=oauth["min_cache"],
         )
-        provider.base_url = _https_url(config["base_url"]) if config.get("base_url") else None
+        endpoint = config.get("service_url") or config.get("base_url")
+        provider.base_url = _https_url(endpoint) if endpoint else None
         _seed_access_token_from_config(provider, config, oauth["leeway"], oauth["min_cache"])
         return provider
 

@@ -47,6 +47,7 @@ poetry run tap-workday-raas <options>
    - `password` - The password of the workday account with access to the reports to extract
    - `reports` -  An array containing a list of objects containing the `report_name` and `report_url`. `report_name` is the name of the stream for the report, and the `report_url` is the URL to the Workday XML REST link for the report you wish to extract.
    - `base_url` - Optional HTTPS API origin or path prefix (for example `https://gateway.example.com/workday`). Report paths and query parameters are retained under this prefix for schema discovery and report downloads. Omit it to use each report URL unchanged. OAuth `instance_url` (or `service_url`) takes precedence, including on refresh; no returned endpoint retains the current route. `token_url` remains a separate HTTPS URL and may use a customer host.
+   - `service_url` - Optional platform-cached OAuth API endpoint, taking precedence over `base_url`. Keep `base_url` as the configured customer base so report URLs under its prefix can be rerouted without duplicating that prefix. Previously used gateway prefixes are also recognized after refresh.
 
    ```json
    {

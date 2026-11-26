@@ -66,9 +66,11 @@ class TestEndpointRouting(unittest.TestCase):
                 with mock.patch.object(requests.adapters.HTTPAdapter, "send", new=send):
                     config = self.config(base_url="https://configured.example/original")
                     if discover:
-                        self.assertEqual(client.download_xsd(REPORT, config), "<schema/>")
+                        report = "https://configured.example/original" + REPORT_PATH + "?region=A%2FB&format=xml"
+                        self.assertEqual(client.download_xsd(report, config), "<schema/>")
                     else:
-                        self.assertEqual(list(client.stream_report(REPORT, config)), [{"row_id": "1"}])
+                        report = "https://configured.example/original" + REPORT_PATH + "?region=A%2FB&format=xml"
+                        self.assertEqual(list(client.stream_report(report, config)), [{"row_id": "1"}])
                 query = "?region=A%2FB&xsds" if discover else "?region=A%2FB&format=json"
                 self.assertEqual([(method, url) for method, url, _, _ in seen], [
                     ("POST", "https://customer.example/oauth/token"),
@@ -117,6 +119,57 @@ class TestEndpointRouting(unittest.TestCase):
             "https://custom.example/prefix/special/ccx/report?filter=1",
             "https://custom.example/prefix/custom/report?filter=2",
         ])
+
+    def test_platform_endpoint_preserves_configured_report_prefix(self):
+        for discover in (False, True):
+            with self.subTest(discover=discover):
+                seen = []
+                def send(adapter, request, **kwargs):
+                    seen.append((request.url, request.headers.get("Authorization"), kwargs["verify"]))
+                    body = b"<schema/>" if discover else b'{"Report_Entry": [{"row_id": "1"}]}'
+                    return response(request, body)
+                config = self.config(
+                    base_url="https://configured.example/original",
+                    service_url="https://returned.example/proxy", access_token="opaque-seeded")
+                report = "https://configured.example/original" + REPORT_PATH + "?region=A%2FB&format=xml"
+                with mock.patch.object(requests.adapters.HTTPAdapter, "send", new=send):
+                    if discover:
+                        self.assertEqual(client.download_xsd(report, config), "<schema/>")
+                    else:
+                        self.assertEqual(list(client.stream_report(report, config)), [{"row_id": "1"}])
+                query = "?region=A%2FB&xsds" if discover else "?region=A%2FB&format=json"
+                self.assertEqual(seen, [
+                    ("https://returned.example/proxy" + REPORT_PATH + query, "Bearer opaque-seeded", True),
+                ])
+
+    def test_seeded_endpoint_and_prepared_resends_preserve_resource_path(self):
+        for first in ("https://first.example/proxy", "https://configured.example/original/proxy"):
+            with self.subTest(first=first):
+                seen = []
+                def send(adapter, request, **kwargs):
+                    seen.append(request.url)
+                    return response(request, b"ok")
+                session, provider = client._session_for_config(self.config(
+                    base_url="https://configured.example/original",
+                    service_url=first, access_token="opaque-seeded"))
+                prepared = session.prepare_request(requests.Request(
+                    "GET", "https://configured.example/original" + REPORT_PATH + "?filter=A%2FB"))
+                with mock.patch.object(requests.adapters.HTTPAdapter, "send", new=send):
+                    session.send(prepared)
+                    session.send(prepared)
+                    provider._save_access_token(mock.Mock(json=lambda: {
+                        "access_token": "opaque-refreshed", "service_url": "https://second.example/new-prefix",
+                    }), None)
+                    session.send(prepared)
+                    session.send(prepared)
+                    session.get(first + REPORT_PATH + "?filter=A%2FB")
+                self.assertEqual(seen, [
+                    first + REPORT_PATH + "?filter=A%2FB",
+                    first + REPORT_PATH + "?filter=A%2FB",
+                    "https://second.example/new-prefix" + REPORT_PATH + "?filter=A%2FB",
+                    "https://second.example/new-prefix" + REPORT_PATH + "?filter=A%2FB",
+                    "https://second.example/new-prefix" + REPORT_PATH + "?filter=A%2FB",
+                ])
 
     def test_missing_endpoint_keeps_configured_or_previous_returned_route(self):
         provider = oauth.WorkdayOAuthTokenProvider.from_config(self.config(base_url="https://custom.example/prefix"))
