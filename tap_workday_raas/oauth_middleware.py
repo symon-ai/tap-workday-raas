@@ -11,6 +11,47 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 import requests
+from urllib.parse import urlsplit, urlunsplit
+
+
+def _https_url(value: str) -> str:
+    parts = urlsplit(value)
+    if parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
+        raise ValueError("Workday URLs must use HTTPS and must not contain credentials")
+    return value
+
+
+class WorkdayRoutingSession(requests.Session):
+    """Resolve the current API endpoint on every request, including 401 retries."""
+
+    def __init__(self, base_url=None):
+        super().__init__()
+        self.base_url = _https_url(base_url) if base_url else None
+        self.oauth_provider = None
+
+    def send(self, request, **kwargs):
+        endpoint = (self.oauth_provider.base_url if self.oauth_provider else None) or self.base_url
+        if endpoint:
+            base = urlsplit(endpoint)
+            source = urlsplit(request.url)
+            path = source.path
+            for origin in (endpoint, self.base_url):
+                if not origin:
+                    continue
+                original = urlsplit(origin)
+                prefix = original.path.rstrip("/")
+                if source.netloc == original.netloc and prefix and (
+                    path == prefix or path.startswith(prefix + "/")
+                ):
+                    path = path[len(prefix):]
+                    break
+            prefix = base.path.rstrip("/")
+            request.url = urlunsplit((
+                base.scheme, base.netloc, prefix + "/" + path.lstrip("/"),
+                source.query, source.fragment,
+            ))
+        _https_url(request.url)
+        return super().send(request, **kwargs)
 
 
 class WorkdayOAuthError(Exception):
@@ -255,6 +296,8 @@ class WorkdayOAuthTokenProvider:
         self._client_id_raw = (client_id or "").strip()
         self._client_id = _token_client_id(self._client_id_raw, client_id_format)
         self._client_secret = client_secret
+        _https_url(token_url)
+        self.base_url = None
         self._token_url = token_url
         self._grant_type = grant_type.strip().lower()
         self._refresh_token = refresh_token
@@ -287,11 +330,13 @@ class WorkdayOAuthTokenProvider:
             access_token_refresh_leeway_seconds=oauth["leeway"],
             access_token_min_cache_seconds=oauth["min_cache"],
         )
+        provider.base_url = _https_url(config["base_url"]) if config.get("base_url") else None
         _seed_access_token_from_config(provider, config, oauth["leeway"], oauth["min_cache"])
         return provider
 
     def apply_to_session(self, session: requests.Session) -> None:
         self._session_ref = session
+        session.oauth_provider = self
         session.headers["Authorization"] = "Bearer " + self.get_access_token()
 
     def get_access_token(self) -> str:
@@ -325,6 +370,7 @@ class WorkdayOAuthTokenProvider:
             headers=headers,
             verify=self._verify,
             timeout=120,
+            allow_redirects=False,
         )
 
     def _token_request_body(self) -> Dict[str, str]:
@@ -400,6 +446,9 @@ class WorkdayOAuthTokenProvider:
         access = body.get("access_token")
         if not access:
             raise WorkdayOAuthError(f"Token response missing access_token: {body}")
+        endpoint = body.get("instance_url") or body.get("service_url")
+        if endpoint:
+            self.base_url = _https_url(endpoint)
         self._access_token = access
         if winning_client_id is not None:
             self._token_client_id_for_auth = winning_client_id

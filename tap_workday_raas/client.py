@@ -5,6 +5,7 @@ from tap_workday_raas.symon_exception import SymonException
 from tap_workday_raas.oauth_middleware import (
     WorkdayOAuthError,
     WorkdayOAuthTokenProvider,
+    WorkdayRoutingSession,
     raas_config_uses_oauth,
     workday_oauth_error_details,
 )
@@ -14,7 +15,7 @@ def _session_for_config(config):
     """Build a requests.Session with basic auth or OAuth Bearer, and optional OAuth provider for retry."""
     disable_ssl = config.get("disable_ssl_verification", False)
     verify = not disable_ssl
-    session = requests.Session()
+    session = WorkdayRoutingSession(config.get("base_url"))
     if disable_ssl:
         session.verify = False
     if raas_config_uses_oauth(config):
@@ -147,10 +148,10 @@ def _iter_report_json(resp):
 
 
 def download_xsd(report_url, config, session=None, oauth_provider=None):
-    if "?" in report_url:
-        xsds_url = report_url.split("?")[0] + "?xsds"
-    else:
-        xsds_url = report_url + "?xsds"
+    report_path, _, query = report_url.partition("?")
+    params = [p for p in query.split("&") if p and not p.startswith("format=") and p != "xsds"]
+    params.append("xsds")
+    xsds_url = report_path + "?" + "&".join(params)
 
     if session is None:
         try:
