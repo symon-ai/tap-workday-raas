@@ -55,6 +55,16 @@ poetry run tap-workday-raas <options>
    }
    ```
 
+### base_url (optional)
+
+Set a complete HTTPS API base, for example `"base_url": "https://workday.example.com/gateway"`,
+to replace the report URL's host. The report path and query parameters are retained beneath
+this optional path prefix, for both schema discovery and report downloads with either authentication mode.
+URL credentials, query strings and fragments are not accepted in a base.
+`token_url` remains the complete, independent OAuth endpoint (custom HTTPS domains are supported).
+OAuth responses may override the API base with `instance_url` (preferred) or `service_url`,
+including after refresh; they never change the token endpoint.
+
 ### OAuth (alternative to username / password)
 
 Use an **API Client for Integrations** from Workday. Typical keys: `auth_type`: `"oauth"`, `client_id`, `client_secret`, `token_url` (`https://{your-host}/ccx/oauth2/{tenant}/token`), `oauth_grant_type` (`client_credentials` or `refresh_token`), optional `oauth_scope`, optional `refresh_token` for the refresh grant.

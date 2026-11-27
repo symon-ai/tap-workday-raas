@@ -9,8 +9,59 @@ import re
 import threading
 import time
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
+
+
+def validate_api_base_url(value: str) -> str:
+    """Accept HTTPS origins/path prefixes, never URL credentials or suffixes."""
+    if not isinstance(value, str) or not value or any(c.isspace() for c in value) or "\\" in value:
+        raise ValueError("Workday base URL must be an HTTPS URL without credentials, query or fragment")
+    try:
+        parts = urlsplit(value)
+        port = parts.port
+        valid = (
+            parts.scheme == "https" and parts.hostname and parts.username is None
+            and parts.password is None and not parts.query and not parts.fragment
+            and not any(ord(c) < 32 or ord(c) == 127 for c in value)
+        )
+    except ValueError:
+        valid = False
+    if not valid:
+        raise ValueError("Workday base URL must be an HTTPS URL without credentials, query or fragment")
+    return value.rstrip("/")
+
+
+class WorkdaySession(requests.Session):
+    """Route report requests through the current API base."""
+
+    def __init__(self, base_url=None):
+        super().__init__()
+        self._base_url = validate_api_base_url(base_url) if base_url is not None else None
+        self._api_bases = [self._base_url] if self._base_url else []
+        self.oauth_provider = None
+
+    def request(self, method, url, **kwargs):
+        base_url = self._base_url
+        if self.oauth_provider is not None:
+            self.oauth_provider.get_access_token()
+            base_url = self.oauth_provider.api_base_url or base_url
+        if base_url:
+            if base_url not in self._api_bases:
+                self._api_bases.append(base_url)
+            resource = urlsplit(url)
+            path = resource.path
+            for previous in sorted(self._api_bases, key=len, reverse=True):
+                old = urlsplit(previous)
+                prefix = old.path.rstrip("/")
+                if resource.netloc == old.netloc and (path == prefix or path.startswith(prefix + "/")):
+                    path = path[len(prefix):]
+                    break
+            base = urlsplit(base_url)
+            url = urlunsplit((base.scheme, base.netloc, base.path.rstrip("/") + "/" + path.lstrip("/"),
+                              resource.query, resource.fragment))
+        return super().request(method, url, **kwargs)
 
 
 class WorkdayOAuthError(Exception):
@@ -270,6 +321,7 @@ class WorkdayOAuthTokenProvider:
         self._session_ref: Optional[requests.Session] = None
         self._access_token_refresh_leeway_seconds = int(access_token_refresh_leeway_seconds)
         self._access_token_min_cache_seconds = int(access_token_min_cache_seconds)
+        self.api_base_url: Optional[str] = None
 
     @classmethod
     def from_config(cls, config: Dict[str, Any], verify: bool = True) -> WorkdayOAuthTokenProvider:
@@ -292,6 +344,8 @@ class WorkdayOAuthTokenProvider:
 
     def apply_to_session(self, session: requests.Session) -> None:
         self._session_ref = session
+        if isinstance(session, WorkdaySession):
+            session.oauth_provider = self
         session.headers["Authorization"] = "Bearer " + self.get_access_token()
 
     def get_access_token(self) -> str:
@@ -398,6 +452,12 @@ class WorkdayOAuthTokenProvider:
         except json.JSONDecodeError as e:
             raise WorkdayOAuthError(f"Token response was not JSON: {resp.text[:500]}") from e
         access = body.get("access_token")
+        api_base_url = body.get("instance_url") or body.get("service_url")
+        if api_base_url:
+            try:
+                self.api_base_url = validate_api_base_url(api_base_url)
+            except ValueError as e:
+                raise WorkdayOAuthError(str(e)) from e
         if not access:
             raise WorkdayOAuthError(f"Token response missing access_token: {body}")
         self._access_token = access
